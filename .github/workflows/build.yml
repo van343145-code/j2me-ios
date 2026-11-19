@@ -22,6 +22,17 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app || true
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios
+
+      - name: Build j2me_rust_engine for iOS
+        run: |
+          echo "=== Building j2me_rust_engine for iOS aarch64 ==="
+          cargo build --manifest-path j2me_rust_engine/Cargo.toml --target aarch64-apple-ios --release
+          ls -lh j2me_rust_engine/target/aarch64-apple-ios/release/libj2me_rust_engine.a
+
       - name: Compile and Package j2me_api.jar
         run: |
           echo "=== Compiling j2me_api.jar ==="
@@ -69,6 +80,7 @@ jobs:
           cp -R "$APP_PATH" Payload/
           cp -v J2MEEmulator/Resources/silent.wav Payload/*.app/ || true
           cp -v J2MEEmulator/SupportingFiles/J2MEEmulator.entitlements Payload/*.app/ || true
+          cp -v j2me_rust_engine/include/j2me_engine.h Payload/*.app/ || true
           codesign --force --deep --sign - --entitlements J2MEEmulator/SupportingFiles/J2MEEmulator.entitlements Payload/*.app || true
           echo "=== Content of App Bundle ==="
           ls -la Payload/*.app/
@@ -85,19 +97,21 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v2.23-native
-          name: "Vạn Trần J2ME Native iOS v2.23"
+          tag_name: v2.24-rust
+          name: "Vạn Trần J2ME Native iOS v2.24 (Tích hợp Lõi Rust & Chuẩn Chơi Game Tuổi Thơ)"
           body: |
-            ## Vạn Trần J2ME iOS v2.23 — Đột Phá Treo Nền 24/24 Siêu Mát Máy Chuẩn "Chơi Game Tuổi Thơ" & Socket Native SO_TC_VO
+            ## Vạn Trần J2ME iOS v2.24 — Tích hợp Mã Nguồn Lõi Rust Engine & Full Flutter Source
             - **Tác giả**: **Vạn Trần idol J2me NSV IOS**
-            - ⚡ **Bí thuật Ngủ Đông Đồ Hoạ Chuẩn "Chơi Game Tuổi Thơ" (Display.class 450L)**:
-              - **Triệt tiêu hoàn toàn `serviceRepaints()` khi tắt màn hình**: Trong J2ME, luồng game liên tục gọi vẽ hình ảnh 60 lần/giây. Khi tắt màn hình hoặc ẩn app, `serviceRepaints()` lập tức trả về ngay (`return`). Luồng tính toán tự đánh, di chuyển, nhặt yên và nhận gói mạng vẫn chạy 100% bình thường nhưng **0% CPU bị lãng phí cho việc vẽ hình ảnh**.
-              - **Pacing chu kỳ vẽ 450ms (~2 FPS)**: Chu kỳ vẽ `doPaint()` và `repaint()` khi ở nền được ép về 450 mili-giây, bỏ qua toàn bộ việc gọi CoreGraphics và render GPU (`flushToScreen`).
-              - **Mức tiêu thụ CPU nền giảm xuống < 0.5%**: Khắc phục triệt để hiện tượng treo đến phút 57 bị đơ/văng do iOS RunningBoard CPU Watchdog. Máy mát rượi, pin không tụt, treo xuyên ngày đêm không bao giờ sập!
-            - 🌐 **Nâng Cấp Tầng Mạng Socket Native Apple Kernel (SO_TRAFFIC_CLASS)**:
-              - **Gán cờ `SO_TC_VO` (Voice/Interactive Priority)**: Báo trực tiếp cho chip Wi-Fi và modem băng tần 4G/5G của iPhone rằng đây là luồng socket tương tác nền ưu tiên cao nhất, tuyệt đối không bị iOS hạ xung nhịp radio hoặc ngắt mạng khi máy vào Deep Sleep.
-              - **Keepalive probes 10s / 5s**: Giữ thông cổng NAT với server game liên tục, chống đứt kết nối của các nhà mạng Viettel, Vinaphone, Mobifone.
-            - ⚔️ **Tích hợp đầy đủ Auto Tàn Sát Toàn Map zNinjaPro & Dọn Sạch Dynamic Island khi thoát game của v2.22**.
-            - **Cài đặt**: Tải file `J2ME-Decade.ipa` bên dưới rồi cài qua TrollStore, Sideloadly hoặc 3uTools.
-          files: J2ME-Decade.ipa
-
+            - 🦀 **Lõi Giả Lập Rust Engine (`j2me_rust_engine`)**:
+              - Được xây dựng hoàn toàn bằng ngôn ngữ Rust kế thừa từ kiến trúc của "Chơi Game Tuổi Thơ".
+              - Tầng mạng BSD native `TCP_NODELAY` + Keepalive 10s non-blocking.
+              - Triệt tiêu render nền `set_sleeping(true)` + 450ms pacing giúp máy mát rượi, không sụt pin khi ẩn ứng dụng/khoá màn hình.
+              - Đính kèm file thư viện tĩnh iOS `libj2me_rust_engine.a` cho các nhà phát triển.
+            - 📱 **Giao Diện Đa Nền Tảng (`j2me_flutter_app`)**:
+              - Đầy đủ mã nguồn Flutter D-pad, bàn phím số Nokia, haptic feedback và bộ chọn file JAR.
+            - ⚡ **Bản IPA `J2ME-Decade.ipa` v2.24**:
+              - Đã tích hợp đầy đủ bí thuật ngủ đông đồ hoạ, socket ưu tiên `SO_TC_VO`, auto tàn sát zNinjaPro.
+              - Cài đặt trực tiếp qua TrollStore, Sideloadly, Scarlet hoặc 3uTools.
+          files: |
+            J2ME-Decade.ipa
+            j2me_rust_engine/target/aarch64-apple-ios/release/libj2me_rust_engine.a

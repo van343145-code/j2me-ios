@@ -2027,11 +2027,21 @@ class GameViewController: UIViewController {
             DispatchQueue.main.async {
                 if self.isUserInitiatedExit {
                     if self.presentingViewController != nil {
-                        self.dismiss(animated: true)
+                        self.dismiss(animated: true) {
+                            NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
+                        }
+                    } else {
+                        NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
                     }
                 } else {
-                    print("[Swift] MIDlet finished unexpectedly while hanging (user did not tap Back)!")
-                    self.handleUnexpectedGameExit()
+                    // Check if MIDlet actually quit cleanly (user chose "Thoát" in game)
+                    if jvm_bridge_is_slot_running(0) == 0 {
+                        print("[Swift] MIDlet finished cleanly by user in-game exit.")
+                        self.forceExitGame()
+                    } else {
+                        print("[Swift] MIDlet finished unexpectedly while hanging (user did not tap Back)!")
+                        self.handleUnexpectedGameExit()
+                    }
                 }
             }
         }
@@ -2118,6 +2128,7 @@ class GameViewController: UIViewController {
         DecadeMiniWindow.shared.hide()
         DecadePiPManager.shared.stopPiP()
         DecadeBackgroundKeeper.shared.setTreoActive(false)
+        DecadeBackgroundKeeper.shared.stopKeepalive()
         UIApplication.shared.isIdleTimerDisabled = false
 
         // 1. Signal stop to ALL slots
@@ -2129,11 +2140,22 @@ class GameViewController: UIViewController {
         // 3. Dismiss UI back to apps list immediately on main thread so it NEVER hangs/freezes!
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            self.dismiss(animated: true) {
-                // Deep cleanup of all JVMs in background
+            NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
+            if self.presentingViewController != nil {
+                self.dismiss(animated: true) {
+                    DispatchQueue.global(qos: .background).async {
+                        jvm_bridge_destroy_all()
+                        DispatchQueue.main.async {
+                            NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
+                        }
+                    }
+                }
+            } else {
                 DispatchQueue.global(qos: .background).async {
                     jvm_bridge_destroy_all()
-                    NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
+                    DispatchQueue.main.async {
+                        NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
+                    }
                 }
             }
         }

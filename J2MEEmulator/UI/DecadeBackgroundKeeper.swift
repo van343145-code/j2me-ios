@@ -469,12 +469,21 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         DecadeLocationKeeper.shared.stop()
         DecadeNetworkKeeper.shared.stop()
         endAppBackgroundTask()
-        audioQueue.async { [weak self] in
+        stopWatchdog()
+        audioQueue.sync { [weak self] in
             self?.stopAudioPipeline()
         }
         DispatchQueue.main.async {
             MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            if #available(iOS 13.0, *) {
+                MPNowPlayingInfoCenter.default().playbackState = .stopped
+            }
             self.clearLockScreenNotification()
+        }
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        } catch {
+            print("[DecadeBackgroundKeeper] Deactivate audio error: \(error)")
         }
     }
 

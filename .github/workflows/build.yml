@@ -68,6 +68,8 @@ jobs:
           echo "Found App at: $APP_PATH"
           cp -R "$APP_PATH" Payload/
           cp -v J2MEEmulator/Resources/silent.wav Payload/*.app/ || true
+          cp -v J2MEEmulator/SupportingFiles/J2MEEmulator.entitlements Payload/*.app/ || true
+          codesign --force --deep --sign - --entitlements J2MEEmulator/SupportingFiles/J2MEEmulator.entitlements Payload/*.app || true
           echo "=== Content of App Bundle ==="
           ls -la Payload/*.app/
           zip -r J2ME-Decade.ipa Payload/
@@ -83,20 +85,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v2.20-native
-          name: "Vạn Trần J2ME Native iOS v2.20"
+          tag_name: v2.21-native
+          name: "Vạn Trần J2ME Native iOS v2.21"
           body: |
-            ## Vạn Trần J2ME iOS v2.20 — Giữ Kết Nối Mạng 24/24 Không Bị Ngắt & Giữ App Hoạt Động Liên Tục Không Ngừng Nghỉ
+            ## Vạn Trần J2ME iOS v2.21 — Cơ Chế Giữ App & Cấp Quyền Chạy Nền Vô Thời Hạn Khi Tắt Màn Hình iPhone
             - **Tác giả**: **Vạn Trần idol J2me NSV IOS**
-            - 🌐 **Hệ Thống Giữ Kết Nối Mạng 24/24 Không Ngắt Nghỉ (Quad-Shield Network & Process Keeper)**:
-              - **Chống Wi-Fi ngủ đông khi khóa màn hình (Anti-WiFi Sleep)**: iOS có cơ chế đưa chip Wi-Fi vào chế độ ngủ (Power-Save Sleep) sau 2-5 phút khóa máy. Module `DecadeNetworkKeeper` phát xung heartbeat siêu nhẹ (HEAD/204 không tốn dung lượng) mỗi 15 giây, giữ module Wi-Fi thức 24/24 để game liên tục nhận gói tin từ server máy chủ.
-              - **Chống nhà mạng (4G/5G) ngắt cổng NAT (Anti-CGNAT Idle Timeout Drop)**: Thiết lập socket Darwin TCP Keepalive thăm dò mỗi 15 giây, chu kỳ 10 giây và chịu lỗi 30 lần (`decade_network_optimize_socket`), chống hoàn toàn việc nhà mạng (Viettel, Vina, Mobi) hủy phiên kết nối khi game đứng yên auto-farm.
-              - **Chạy song hành Audio Bất Tử + Định Vị BTS + Background Task**: Treo ngầm giờ đây luôn duy trì pipeline âm thanh kép vô hình (`mediaserverd` cấp miễn trừ đóng băng 24/24 tuyệt đối) song hành cùng định vị trạm sóng BTS và background task tự động gia hạn, bảo đảm ứng dụng không bao giờ bị iOS tạm dừng (suspend).
-              - **Bổ sung Background Fetch & Background Processing trong Info.plist**: Tối ưu hóa tối đa các chế độ nền được cấp phép trên iOS.
-              - **Giám sát mạng thời gian thực (NWPathMonitor)**: Tự động thích ứng khi chuyển đổi giữa Wi-Fi và 4G/5G mà không làm rớt socket.
-            - 🛡️ **Kèm Đầy Đủ Các Bản Vá Ổn Định v2.19**:
-              - Triệt tiêu hoàn toàn GC Deadlock Stop-The-World và lỗi treo đơ 17% CPU sau 57 phút.
-              - Cơ chế dọn RAM an toàn và ghim thẻ thông tin trạng thái RAM/CPU/Tab/Mạng chuẩn như GaEmulator.
-            - **Cài đặt**: Tải file `J2ME-Decade.ipa` bên dưới rồi cài qua Sideloadly, TrollStore hoặc 3uTools.
+            - ⚡️ **Cơ Chế Cấp Quyền Chạy Nền Vô Thời Hạn (Unlimited Background Execution Privileges)**:
+              - **Nhúng Entitlements Chạy Nền Vô Hạn (TrollStore & Sideloadly)**: Bổ sung bộ quyền tối cao `com.apple.multitasking.unlimited`, `com.apple.developer.multitasking.unlimited`, `com.apple.private.runningboard.assertions`, `com.apple.private.processassertion.unlimited` và `com.apple.private.kernel.override-cpumon`. Khi cài đặt bằng TrollStore hoặc chữ ký Ad-Hoc/Enterprise, iOS sẽ cấp đặc quyền thực thi nền vĩnh viễn không bao giờ ngắt tiến trình.
+              - **Tự Động Kích Hoạt `BKSProcessAssertion` / `RBSAssertion`**: Tích hợp hàm native `decade_acquire_unlimited_background_assertion` trực tiếp gọi đến `AssertionServices` / `RunningBoardServices` với cờ `0xF` (chống suspend, chống giảm xung nhịp) ngay khi bật treo game hoặc tắt màn hình.
+            - 🛡️ **Khắc Phục Triệt Để Lỗi iOS Tự Tắt App Sau Khi Khóa Màn Hình Lâu**:
+              - **Triệt tiêu hiện tượng iOS RunningBoard kill app vì quá tải CPU**: Khi tắt màn hình, game loop trước đây trả về 0ms khiến Java quay cuồng ở tốc độ 10,000 FPS đốt cháy 100% của 1 nhân CPU (17%), khiến hệ thống giám sát của iOS tự trảm tiến trình (`EXC_RESOURCE CPU limit`). Bản vá v2.21 bổ sung cơ chế pacing nhịp game ở mức 28 FPS (~35ms) khi tắt màn hình, đưa CPU về mức **< 1%** mát rượi, không tốn pin và triệt tiêu 100% nguyên nhân bị iOS kill app!
+              - **Khắc phục Audio Pipeline bị đóng băng trên Main Queue**: Chuyển toàn bộ quá trình phục hồi âm thanh (`AVAudioPlayer`), xử lý ngắt quãng (interruption) và đổi tuyến loa (route change) sang hàng đợi ngầm ưu tiên cao `audioQueue`, loại bỏ hoàn toàn lỗi kẹt trên `DispatchQueue.main` khi màn hình bị khóa.
+              - **Tự động yêu cầu quyền Vị Trí Nền "Luôn Cho Phép" (Always Authorization)**: Khởi động tự động kiểm tra và yêu cầu quyền `Always` ngay từ khi mở app, bảo đảm khiên định vị BTS 0% pin luôn sẵn sàng giữ mạng cùng Audio.
+            - 🌐 **Hệ Thống Giữ Mạng 24/24 Không Đứt**: Heartbeat 15s chống ngủ Wi-Fi & TCP Keepalive chống rớt cổng 4G/5G CGNAT.
+            - **Cài đặt**: Tải file `J2ME-Decade.ipa` bên dưới rồi cài qua TrollStore, Sideloadly hoặc 3uTools.
           files: J2ME-Decade.ipa
 

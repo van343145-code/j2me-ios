@@ -116,6 +116,12 @@ final class DecadeLocationKeeper: NSObject, CLLocationManagerDelegate {
             manager.startUpdatingLocation()
         }
     }
+
+    func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
+        if isLocationModeActive {
+            manager.startUpdatingLocation()
+        }
+    }
 }
 
 // ============================================================
@@ -237,16 +243,14 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     private var remoteCommandsConfigured = false
     private var currentGameName: String = "J2ME Game"
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
+    private let audioQueue = DispatchQueue(label: "com.decade.keepalive.audio", qos: .userInteractive)
 
     private func beginAppBackgroundTask() {
         guard bgTaskID == .invalid else { return }
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "DecadeKeepAliveTransition") { [weak self] in
             guard let self = self else { return }
-            print("[DecadeBackgroundKeeper] Background task expiring, renewing immediately...")
+            print("[DecadeBackgroundKeeper] Background task expiring, ending cleanly...")
             self.endAppBackgroundTask()
-            if self.isTreoActive {
-                self.beginAppBackgroundTask()
-            }
         }
     }
 
@@ -432,9 +436,14 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     func startKeepalive() {
         setupRemoteCommandsIfNeeded()
 
-        // 1. Luôn kích hoạt Audio Pipeline bất tử (AVAudioPlayer loop + AVAudioEngine 18Hz)
+        // 0. Cấp quyền chạy nền vô thời hạn trên iOS (BKSProcessAssertion / TrollStore / Enterprise)
+        decade_acquire_unlimited_background_assertion()
+
+        // 1. Luôn kích hoạt Audio Pipeline bất tử (AVAudioPlayer loop) trên hàng đợi nền
         // để mediaserverd cấp assertion chạy nền 24/24 không bao giờ bị iOS đóng băng (freeze)
-        startAudioPipeline(forceRecreate: false)
+        audioQueue.async { [weak self] in
+            self?.startAudioPipeline(forceRecreate: false)
+        }
 
         // 2. Kích hoạt song song Định vị BTS nếu bật
         if DecadeLocationKeeper.shared.isLocationModeActive {
@@ -449,17 +458,24 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         // 4. Kích hoạt Background Task duy trì chuyển cảnh
         beginAppBackgroundTask()
 
-        updateNowPlayingInfo()
+        DispatchQueue.main.async { [weak self] in
+            self?.updateNowPlayingInfo()
+        }
         startWatchdog()
     }
 
     func stopKeepalive() {
+        decade_release_unlimited_background_assertion()
         DecadeLocationKeeper.shared.stop()
         DecadeNetworkKeeper.shared.stop()
         endAppBackgroundTask()
-        stopAudioPipeline()
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        clearLockScreenNotification()
+        audioQueue.async { [weak self] in
+            self?.stopAudioPipeline()
+        }
+        DispatchQueue.main.async {
+            MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+            self.clearLockScreenNotification()
+        }
     }
 
     private func stopAudioPipeline() {
@@ -479,13 +495,18 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
 
     @objc func onSceneWillResignActive() {
         if isTreoActive {
-            startAudioPipeline(forceRecreate: false)
+            decade_acquire_unlimited_background_assertion()
+            audioQueue.async { [weak self] in
+                self?.startAudioPipeline(forceRecreate: false)
+            }
             if DecadeLocationKeeper.shared.isLocationModeActive {
                 DecadeLocationKeeper.shared.start()
             }
             DecadeNetworkKeeper.shared.start()
             beginAppBackgroundTask()
-            updateNowPlayingInfo()
+            DispatchQueue.main.async { [weak self] in
+                self?.updateNowPlayingInfo()
+            }
         }
     }
 
@@ -541,44 +562,49 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         if type == .began {
             beginAppBackgroundTask()
         } else if type == .ended {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            audioQueue.async { [weak self] in
                 guard let self = self, self.isTreoActive else { return }
                 self.startAudioPipeline(forceRecreate: true)
-                self.updateNowPlayingInfo()
                 self.endAppBackgroundTask()
+                DispatchQueue.main.async {
+                    self.updateNowPlayingInfo()
+                }
             }
         }
     }
 
     @objc private func handleRouteChange(_ notification: Notification) {
         guard isTreoActive else { return }
-        DispatchQueue.main.async { [weak self] in
+        audioQueue.async { [weak self] in
             guard let self = self, self.isTreoActive else { return }
             if self.audioPlayer?.isPlaying != true {
                 self.startFallbackAudioPlayer()
             }
-            if self.audioEngine?.isRunning != true {
-                _ = self.startRealtimeAudioEngine()
+            DispatchQueue.main.async {
+                self.updateNowPlayingInfo()
             }
-            self.updateNowPlayingInfo()
         }
     }
 
     @objc private func handleMediaServicesReset() {
         guard isTreoActive else { return }
-        DispatchQueue.main.async { [weak self] in
+        audioQueue.async { [weak self] in
             guard let self = self, self.isTreoActive else { return }
             self.startAudioPipeline(forceRecreate: true)
-            self.updateNowPlayingInfo()
+            DispatchQueue.main.async {
+                self.updateNowPlayingInfo()
+            }
         }
     }
 
     @objc private func handleEngineConfigurationChange() {
         guard isTreoActive else { return }
-        DispatchQueue.main.async { [weak self] in
+        audioQueue.async { [weak self] in
             guard let self = self, self.isTreoActive else { return }
-            if self.audioEngine?.isRunning == false {
-                self.startAudioPipeline(forceRecreate: true)
+            if self.audioPlayer?.isPlaying != true {
+                self.startFallbackAudioPlayer()
+            }
+            DispatchQueue.main.async {
                 self.updateNowPlayingInfo()
             }
         }
@@ -821,11 +847,13 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             // 1. Luôn kích hoạt AVAudioPlayer chạy nền liên tục (vòng lặp vô tận -1)
             startFallbackAudioPlayer()
 
-            // 2. Kích hoạt song song AVAudioEngine + AVAudioSourceNode hạ âm 18Hz
-            if audioEngine == nil {
-                _ = startRealtimeAudioEngine()
-            } else if let eng = audioEngine, !eng.isRunning {
-                try? eng.start()
+            // 2. Kích hoạt song song AVAudioEngine hạ âm chỉ khi AVAudioPlayer chưa chạy được
+            if audioPlayer?.isPlaying != true {
+                if audioEngine == nil {
+                    _ = startRealtimeAudioEngine()
+                } else if let eng = audioEngine, !eng.isRunning {
+                    try? eng.start()
+                }
             }
         } catch {
             print("[DecadeBackgroundKeeper] Audio pipeline error: \(error) — ensuring fallback player runs")
@@ -891,15 +919,18 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             try? session.setActive(true, options: [])
 
             if audioPlayer == nil {
-                // Ưu tiên sub-audible 16Hz PCM phi số không để mediaserverd không bao giờ ngắt bộ khuếch đại do tưởng im lặng số
-                var player: AVAudioPlayer? = try? AVAudioPlayer(data: createSubaudible16HzWavData())
-                if player == nil, let bundleURL = Bundle.main.url(forResource: "silent", withExtension: "wav") {
+                // Ưu tiên nạp file silent.wav trong App Bundle
+                var player: AVAudioPlayer? = nil
+                if let bundleURL = Bundle.main.url(forResource: "silent", withExtension: "wav") {
                     player = try? AVAudioPlayer(contentsOf: bundleURL)
+                }
+                if player == nil {
+                    player = try? AVAudioPlayer(data: createSubaudible16HzWavData())
                 }
                 audioPlayer = player
                 audioPlayer?.delegate = self
                 audioPlayer?.numberOfLoops = -1
-                audioPlayer?.volume = 0.5
+                audioPlayer?.volume = 0.05
                 audioPlayer?.prepareToPlay()
             }
             if audioPlayer?.isPlaying == false {
@@ -912,13 +943,17 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     // AVAudioPlayerDelegate
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         if isTreoActive {
-            player.play()
+            audioQueue.async { [weak self] in
+                self?.audioPlayer?.play()
+            }
         }
     }
 
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         if isTreoActive {
-            startAudioPipeline(forceRecreate: true)
+            audioQueue.async { [weak self] in
+                self?.startAudioPipeline(forceRecreate: true)
+            }
         }
     }
 
@@ -930,13 +965,16 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         timer.setEventHandler { [weak self] in
             guard let self = self, self.isTreoActive else { return }
 
+            // 0. Duy trì quyền chạy nền vô thời hạn trên iOS
+            decade_acquire_unlimited_background_assertion()
+
             // 1. Luôn bảo đảm Audio Pipeline (AVAudioPlayer loop) đang phát
-            if self.audioPlayer?.isPlaying != true {
-                print("[DecadeBackgroundKeeper] Watchdog: AudioPlayer not playing, resuming...")
-                self.startFallbackAudioPlayer()
-            }
-            if self.audioEngine?.isRunning != true {
-                _ = self.startRealtimeAudioEngine()
+            self.audioQueue.async { [weak self] in
+                guard let self = self, self.isTreoActive else { return }
+                if self.audioPlayer?.isPlaying != true {
+                    print("[DecadeBackgroundKeeper] Watchdog: AudioPlayer not playing, resuming...")
+                    self.startFallbackAudioPlayer()
+                }
             }
 
             // 2. Bảo đảm Location Keeper đang chạy nếu được kích hoạt

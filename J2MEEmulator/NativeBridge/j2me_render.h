@@ -42,6 +42,13 @@ int j2me_render_is_background(void);
 /// Immediately free all queued dead RenderContext/RenderImage shells.
 void j2me_render_purge_dead_shells(void);
 
+/// Dynamically requests an unlimited background assertion (BKSProcessAssertion/RBSAssertion)
+/// from iOS RunningBoard to prevent app suspension when screen is turned off.
+void decade_acquire_unlimited_background_assertion(void);
+
+/// Releases the unlimited background assertion when keepalive is turned off.
+void decade_release_unlimited_background_assertion(void);
+
 #ifdef __cplusplus
 }
 #endif

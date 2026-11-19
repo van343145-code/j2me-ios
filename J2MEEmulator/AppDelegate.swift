@@ -21,6 +21,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate, UNUserNotificationCenterD
         // Dọn sạch mọi thông báo cũ từ phiên trước khi khởi động app
         DecadeBackgroundKeeper.shared.clearLockScreenNotification()
 
+        // Xin quyền vị trí nền (Always) để dự phòng giữ app & mạng liên tục khi tắt màn hình
+        DecadeLocationKeeper.shared.requestPermissionIfNeeded()
+
         // Khởi động Audio Keep-Alive ngay ở Foreground khi mở app để iOS cấp quyền chạy nền liên tục
         if DecadeBackgroundKeeper.shared.isTreoActive {
             DecadeBackgroundKeeper.shared.startKeepalive()

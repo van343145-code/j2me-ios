@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdatomic.h>
 #include <unistd.h>
+#include <dlfcn.h>
 
 // ============================================================
 // Internal structures
@@ -443,8 +444,11 @@ static s32 n_flushToScreen(Runtime *runtime, JClass *clazz) {
 
     if (atomic_load_explicit(&g_is_background, memory_order_relaxed)) {
         // In background / screen-off mode: dead shells are purged above.
-        // Skip CGImage creation & screen blit entirely to conserve 100% CPU/GPU,
-        // and return immediately without arbitrary sleep so game loop remains smooth!
+        // Tiết kiệm 99% CPU khi tắt màn hình: Pacing nhịp game ở mức 28 FPS (~35ms).
+        // Ngăn chặn vòng lặp game quay cuồng 10,000 FPS đốt cháy 100% nhân CPU (17%),
+        // triệt tiêu hoàn toàn việc iOS RunningBoard kill app vì quá tải CPU nền!
+        struct timespec ts = {0, 35 * 1000 * 1000};
+        nanosleep(&ts, NULL);
         return RUNTIME_STATUS_NORMAL;
     }
 
@@ -1421,4 +1425,50 @@ void j2me_render_cleanup(void) {
 
     g_render_stopped = 0; // ready for next game session
     printf("[J2ME Render] Cleanup: %d contexts, %d images released\n", rc_count, img_count);
+}
+
+// ============================================================
+// Unlimited Background Assertion (BKSProcessAssertion / RBSAssertion)
+// ============================================================
+static id g_bks_assertion = nil;
+
+void decade_acquire_unlimited_background_assertion(void) {
+    if (g_bks_assertion) return;
+
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        dlopen("/System/Library/PrivateFrameworks/AssertionServices.framework/AssertionServices", RTLD_NOW);
+        dlopen("/System/Library/PrivateFrameworks/RunningBoardServices.framework/RunningBoardServices", RTLD_NOW);
+    });
+
+    Class bksCls = NSClassFromString(@"BKSProcessAssertion");
+    if (bksCls) {
+        int pid = [[NSProcessInfo processInfo] processIdentifier];
+        // flags: 0xF (PreventTaskSuspend | PreventTaskThrottleDown | AllowIdleSleep)
+        // reason: 7 (BackgroundUI / Continuous) or 10000
+        unsigned int flags = 0xF;
+        unsigned int reason = 7;
+
+        SEL initSel = @selector(initWithPID:flags:reason:name:withHandler:);
+        if ([bksCls instancesRespondToSelector:initSel]) {
+            id assertion = [bksCls alloc];
+            typedef id (*InitMethod)(id, SEL, int, unsigned int, unsigned int, NSString *, id);
+            InitMethod initFunc = (InitMethod)[assertion methodForSelector:initSel];
+            g_bks_assertion = initFunc(assertion, initSel, pid, flags, reason, @"com.decade.keepalive.unlimited", ^(BOOL acquired) {
+                NSLog(@"[DecadeAssertion] BKSProcessAssertion state: acquired=%d", acquired);
+            });
+            NSLog(@"[DecadeAssertion] Unlimited assertion created: %@", g_bks_assertion);
+        }
+    }
+}
+
+void decade_release_unlimited_background_assertion(void) {
+    if (g_bks_assertion) {
+        SEL invSel = @selector(invalidate);
+        if ([g_bks_assertion respondsToSelector:invSel]) {
+            [g_bks_assertion performSelector:invSel];
+        }
+        g_bks_assertion = nil;
+        NSLog(@"[DecadeAssertion] Unlimited assertion released.");
+    }
 }

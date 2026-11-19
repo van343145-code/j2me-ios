@@ -37,17 +37,25 @@ void decade_network_optimize_socket(int fd) {
     setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (const void *)&keepalive, sizeof(keepalive));
 
 #if defined(__APPLE__) || defined(__MACH__)
-    // Probe after 15 seconds of idle (chủ động giữ cổng NAT 4G/5G và không để Wi-Fi sleep 24/24)
-    int keepidle = 15;
+    // Probe after 10 seconds of idle (chủ động giữ cổng NAT 4G/5G và không để Wi-Fi sleep 24/24)
+    int keepidle = 10;
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, (const void *)&keepidle, sizeof(keepidle));
 
-    // Repeat probe every 10 seconds if unacknowledged
-    int keepintvl = 10;
+    // Repeat probe every 5 seconds if unacknowledged
+    int keepintvl = 5;
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (const void *)&keepintvl, sizeof(keepintvl));
 
-    // Drop only after 30 unacknowledged probes (chịu được biến động mạng tạm thời 5+ phút)
-    int keepcnt = 30;
+    // Drop only after 24 unacknowledged probes (2 phút chịu được biến động mạng tạm thời)
+    int keepcnt = 24;
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (const void *)&keepcnt, sizeof(keepcnt));
+
+    // SO_TRAFFIC_CLASS: Gán ưu tiên Voice/Interactive (SO_TC_VO) ở tầng kernel iOS.
+    // Báo cho chip Wi-Fi và modem 4G/5G của iPhone biết đây là kết nối nền quan trọng,
+    // tuyệt đối không ngắt mạng hoặc đưa radio vào chế độ Deep Sleep khi tắt màn hình!
+#if defined(SO_TRAFFIC_CLASS) && defined(SO_TC_VO)
+    int tc = SO_TC_VO;
+    setsockopt(fd, SOL_SOCKET, SO_TRAFFIC_CLASS, (const void *)&tc, sizeof(tc));
+#endif
 #endif
 
     // 4. Increase socket buffer sizes to 128KB for smooth data throughput

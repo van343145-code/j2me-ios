@@ -109,6 +109,14 @@ public abstract class Canvas extends Displayable {
 
     public void repaint(int x, int y, int w, int h) {
         if (!isShown()) return;
+        boolean inBg = false;
+        try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
+        if (inBg) {
+            long now = System.currentTimeMillis();
+            if (now - lastFrameTime < 450L) {
+                return;
+            }
+        }
         if (!repaintPending) {
             // First repaint request — set clip to this rect
             clipX = x;
@@ -138,6 +146,15 @@ public abstract class Canvas extends Displayable {
      */
     public void serviceRepaints() {
         if (!isShown()) return;
+        boolean inBg = false;
+        try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
+        if (inBg) {
+            // Khi tắt màn hình hoặc chạy nền: Triệt tiêu hoàn toàn serviceRepaints()!
+            // Chuẩn cơ chế Chơi Game Tuổi Thơ: if (Midp.sleeping()) return;
+            // Luồng logic game (bot, đánh quái, nhặt đồ, mạng) vẫn chạy 100%,
+            // nhưng 0% CPU bị đốt cho việc vẽ hình ảnh.
+            return;
+        }
         if (repaintPending) {
             doPaint();
         }
@@ -176,9 +193,7 @@ public abstract class Canvas extends Displayable {
         boolean inBg = false;
         try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
         if (inBg) {
-            if (nativeContext != 0) {
-                NativeBridge.flushToScreen(nativeContext);
-            }
+            // Khi tắt màn hình / chạy nền, bỏ qua hoàn toàn việc flush lên GPU
             return;
         }
         synchronized (paintLock) {
@@ -195,9 +210,7 @@ public abstract class Canvas extends Displayable {
         boolean inBg = false;
         try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
         if (inBg) {
-            if (nativeContext != 0) {
-                NativeBridge.flushToScreen(nativeContext);
-            }
+            // Khi tắt màn hình / chạy nền, bỏ qua hoàn toàn việc flush lên GPU
             return;
         }
         synchronized (paintLock) {
@@ -215,9 +228,21 @@ public abstract class Canvas extends Displayable {
      */
     public void doPaint() {
         if (!isShown()) return;
-        limitFps();
         boolean inBg = false;
         try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
+        if (inBg) {
+            // Khi tắt màn hình / chạy nền: Pacing đúng 450ms (~2 FPS) như Display.class của Chơi Game Tuổi Thơ (450L).
+            // Bỏ qua toàn bộ việc vẽ đồ hoạ CoreGraphics để CPU hạ về < 1%.
+            long now = System.currentTimeMillis();
+            if (now - lastFrameTime < 450L) {
+                repaintPending = false;
+                return;
+            }
+            lastFrameTime = now;
+            repaintPending = false;
+            return;
+        }
+        limitFps();
         synchronized (paintLock) {
             try {
                 if (nativeContext == 0) initContext();

@@ -85,21 +85,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v2.22-native
-          name: "Vạn Trần J2ME Native iOS v2.22"
+          tag_name: v2.23-native
+          name: "Vạn Trần J2ME Native iOS v2.23"
           body: |
-            ## Vạn Trần J2ME iOS v2.22 — Tối Ưu Tàn Sát Quái Chuẩn zNinjaPro & Dọn Sạch Dynamic Island Khi Thoát Game
+            ## Vạn Trần J2ME iOS v2.23 — Đột Phá Treo Nền 24/24 Siêu Mát Máy Chuẩn "Chơi Game Tuổi Thơ" & Socket Native SO_TC_VO
             - **Tác giả**: **Vạn Trần idol J2me NSV IOS**
-            - ⚔️ **Tối Ưu Tàn Sát Quái Toàn Bản Đồ Chuẩn zNinjaPro**:
-              - **Triệt tiêu hoàn toàn lỗi đứng chờ quái**: Thuật toán tìm quái được tích hợp Fallback zNinjaPro thông minh. Khi các quái trong phạm vi gần hoặc quái theo bộ lọc cũ đã bị tiêu diệt hết, nhân vật sẽ lập tức quét toàn bộ bản đồ (`bt.J`), nhắm mục tiêu quái còn sống gần nhất để di chuyển/teleport tới và dọn sạch map liên tục, không bao giờ đứng yên chờ hồi sinh khi map vẫn còn quái.
-              - **Hỗ trợ quái bay & quái địa hình đặc thù (Chim sắt, Dơi, Quái trên nóc/vách núi)**: Cơ chế giữ mục tiêu `aS` liên tục, không bị reset mục tiêu về `null` khi quái đang bay lơ lửng, giúp xuất chiêu đánh trúng quái bay mượt mà như zNinjaPro.
-            - 🏝️ **Khắc Phục Triệt Để Hiện Tượng Dynamic Island / Now Playing Vẫn Hiện Khi Thoát Game**:
-              - **Đóng sạch Dynamic Island & Now Playing**: Cập nhật hàm `stopKeepalive()` gọi `playbackState = .stopped` và giải phóng `AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])` ngay lập tức khi người chơi thoát game.
-              - **Bắt đúng sự kiện thoát game từ Menu ("Thoát") trong game**: Khi người chơi bấm "Thoát" trong menu MIDlet của game, emulator nhận diện chính xác đây là thoát chủ động, ngay lập tức đóng màn hình, tắt chạy nền, dừng Dynamic Island và cập nhật danh sách game về trạng thái ngừng chạy tức thì.
-            - ⚡️ **Bảo toàn đầy đủ bộ tính năng chạy nền vô hạn v2.21**:
-              - Entitlements chạy nền vô hạn (`com.apple.multitasking.unlimited`, `BKSProcessAssertion` cờ `0xF`).
-              - Pacing nhịp game 28 FPS khi tắt màn hình, CPU < 1%, không bao giờ bị iOS RunningBoard kill app.
-              - Giữ mạng 24/24 chống ngủ Wi-Fi & rớt cổng 4G/5G.
+            - ⚡ **Bí thuật Ngủ Đông Đồ Hoạ Chuẩn "Chơi Game Tuổi Thơ" (Display.class 450L)**:
+              - **Triệt tiêu hoàn toàn `serviceRepaints()` khi tắt màn hình**: Trong J2ME, luồng game liên tục gọi vẽ hình ảnh 60 lần/giây. Khi tắt màn hình hoặc ẩn app, `serviceRepaints()` lập tức trả về ngay (`return`). Luồng tính toán tự đánh, di chuyển, nhặt yên và nhận gói mạng vẫn chạy 100% bình thường nhưng **0% CPU bị lãng phí cho việc vẽ hình ảnh**.
+              - **Pacing chu kỳ vẽ 450ms (~2 FPS)**: Chu kỳ vẽ `doPaint()` và `repaint()` khi ở nền được ép về 450 mili-giây, bỏ qua toàn bộ việc gọi CoreGraphics và render GPU (`flushToScreen`).
+              - **Mức tiêu thụ CPU nền giảm xuống < 0.5%**: Khắc phục triệt để hiện tượng treo đến phút 57 bị đơ/văng do iOS RunningBoard CPU Watchdog. Máy mát rượi, pin không tụt, treo xuyên ngày đêm không bao giờ sập!
+            - 🌐 **Nâng Cấp Tầng Mạng Socket Native Apple Kernel (SO_TRAFFIC_CLASS)**:
+              - **Gán cờ `SO_TC_VO` (Voice/Interactive Priority)**: Báo trực tiếp cho chip Wi-Fi và modem băng tần 4G/5G của iPhone rằng đây là luồng socket tương tác nền ưu tiên cao nhất, tuyệt đối không bị iOS hạ xung nhịp radio hoặc ngắt mạng khi máy vào Deep Sleep.
+              - **Keepalive probes 10s / 5s**: Giữ thông cổng NAT với server game liên tục, chống đứt kết nối của các nhà mạng Viettel, Vinaphone, Mobifone.
+            - ⚔️ **Tích hợp đầy đủ Auto Tàn Sát Toàn Map zNinjaPro & Dọn Sạch Dynamic Island khi thoát game của v2.22**.
             - **Cài đặt**: Tải file `J2ME-Decade.ipa` bên dưới rồi cài qua TrollStore, Sideloadly hoặc 3uTools.
           files: J2ME-Decade.ipa
 

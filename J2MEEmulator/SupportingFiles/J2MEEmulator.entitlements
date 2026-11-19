@@ -2,20 +2,5 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Cấp quyền chạy nền vô thời hạn trên TrollStore, Enterprise & Jailbreak -->
-	<key>com.apple.multitasking.unlimited</key>
-	<true/>
-	<key>com.apple.developer.multitasking.unlimited</key>
-	<true/>
-	<key>com.apple.private.runningboard.assertions</key>
-	<true/>
-	<key>com.apple.private.processassertion.unlimited</key>
-	<true/>
-	<key>com.apple.runningboard.assertions.webkit</key>
-	<true/>
-	<key>com.apple.private.kernel.override-cpumon</key>
-	<true/>
-	<key>get-task-allow</key>
-	<true/>
 </dict>
 </plist>

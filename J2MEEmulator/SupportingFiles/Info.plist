@@ -111,5 +111,10 @@
 		<string>fetch</string>
 		<string>processing</string>
 	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.decade.j2me.refresh</string>
+		<string>com.decade.j2me.processing</string>
+	</array>
 </dict>
 </plist>

@@ -15,7 +15,11 @@ public class StringItem extends Item {
     }
 
     public String getText() { return text; }
-    public void setText(String text) { this.text = text; }
+    public void setText(String text) {
+        if (this.text == null ? text == null : this.text.equals(text)) return;
+        this.text = text;
+        if (owner != null) owner.requestNativeRefresh();
+    }
     public int getAppearanceMode() { return appearanceMode; }
     public Font getFont() { return Font.getDefaultFont(); }
     public void setFont(Font font) { }

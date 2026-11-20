@@ -13,16 +13,20 @@ extern "C" {
 #define J2ME_UI_LIST_SELECT      11
 #define J2ME_UI_ALERT_DISMISSED  12
 #define J2ME_UI_LIST_SET_INDEX   13
+#define J2ME_UI_FORM_CHANGED     14
 
 /// Register UI-related native methods with the JVM.
 void j2me_ui_reg_natives(MiniJVM *jvm);
 
 /// Callback for creating/showing native iOS views.
-/// Called from JVM thread — implementations must dispatch to main thread.
+/// Called on the main thread after publishing the screen.
 typedef void (*j2me_ui_callback)(int action, const char *data);
 
 /// Set the UI callback.
 void j2me_ui_set_callback(j2me_ui_callback callback);
+void j2me_ui_restore_focused_screen(void);
+void j2me_ui_reset_slot(int slot);
+int j2me_ui_screen_revision(int slot);
 
 // UI actions for the callback
 #define J2ME_UI_ACTION_SHOW_CANVAS    1

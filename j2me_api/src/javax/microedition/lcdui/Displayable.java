@@ -42,10 +42,20 @@ public abstract class Displayable {
 
     protected void sizeChanged(int w, int h) { }
 
+    final void requestNativeRefresh() {
+        Display.getDisplay(null).refresh(this);
+    }
+
+    final Command getCommandAt(int index) {
+        return index >= 0 && index < commands.size() ? commands.get(index) : null;
+    }
+
     /** Fire command action. Called from Display event loop when a command event is received. */
     public void fireCommandAction(int commandIndex) {
-        if (commandListener != null && commandIndex >= 0 && commandIndex < commands.size()) {
-            commandListener.commandAction(commands.get(commandIndex), this);
-        }
+        fireCommandAction(getCommandAt(commandIndex));
+    }
+
+    final void fireCommandAction(Command command) {
+        if (commandListener != null && command != null) commandListener.commandAction(command, this);
     }
 }

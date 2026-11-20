@@ -15,7 +15,23 @@ public class TextBox extends Screen {
     }
 
     public String getString() { return text != null ? text : ""; }
-    public void setString(String text) { this.text = text != null ? text : ""; }
+    public void setString(String text) {
+        String value = limitText(text);
+        if (value.equals(this.text)) return;
+        this.text = value;
+        requestNativeRefresh();
+    }
+
+    void syncFromNative() {
+        String value = NativeBridge.getTextBoxText();
+        if (value != null && (constraints & TextField.UNEDITABLE) == 0) text = limitText(value);
+    }
+
+    private String limitText(String value) {
+        if (value == null) return "";
+        if (maxSize <= 0 || value.length() <= maxSize) return value;
+        return value.substring(0, maxSize);
+    }
     public int getMaxSize() { return maxSize; }
     public int setMaxSize(int maxSize) { this.maxSize = maxSize; return maxSize; }
     public int getConstraints() { return constraints; }

@@ -86,8 +86,8 @@ int jvm_bridge_get_focused_slot(void) {
     return atomic_load(&g_focused_slot);
 }
 
-int jvm_bridge_get_jvm_slot(void *jvm_ptr) {
-    if (!jvm_ptr) return 0;
+int jvm_bridge_find_jvm_slot(void *jvm_ptr) {
+    if (!jvm_ptr) return -1;
     pthread_mutex_lock(&g_slots_lock);
     for (int i = 0; i < JVM_BRIDGE_MAX_SLOTS; i++) {
         if (g_slots[i].jvm == jvm_ptr) {
@@ -96,7 +96,12 @@ int jvm_bridge_get_jvm_slot(void *jvm_ptr) {
         }
     }
     pthread_mutex_unlock(&g_slots_lock);
-    return 0;
+    return -1;
+}
+
+int jvm_bridge_get_jvm_slot(void *jvm_ptr) {
+    int slot = jvm_bridge_find_jvm_slot(jvm_ptr);
+    return slot < 0 ? 0 : slot;
 }
 
 int jvm_bridge_init_slot(int slot, const char *res_root, const char *save_root, const char *midlet_jar,
@@ -246,6 +251,7 @@ void jvm_bridge_destroy_slot(int slot) {
         }
         thread_stop_all(jvm);
         jvm_destroy(jvm);
+        j2me_ui_reset_slot(slot);
         return;
     }
     pthread_mutex_unlock(&g_slots_lock);

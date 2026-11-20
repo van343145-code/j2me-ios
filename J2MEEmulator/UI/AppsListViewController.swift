@@ -462,7 +462,7 @@ class AppsListViewController: UIViewController,
             let gid = fileName.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
             let savedW = UserDefaults.standard.object(forKey: "resW_\(gid)") as? Int ?? 0
             let savedH = UserDefaults.standard.object(forKey: "resH_\(gid)") as? Int ?? 0
-            let resStr = (savedW > 0 && savedH > 0) ? "\(savedW)×\(savedH)" : "Tự Động"
+            let resStr = (savedW > 0 && savedH > 0) ? "\(savedW)×\(savedH)" : "Theo Form Game"
 
             return (appName, jar.path, fileName, meta?.version, meta?.vendor, jarIcon, sizeString, resStr)
         }
@@ -498,7 +498,7 @@ class AppsListViewController: UIViewController,
                 let gid = fileName.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
                 let savedW = UserDefaults.standard.object(forKey: "resW_\(gid)") as? Int ?? 0
                 let savedH = UserDefaults.standard.object(forKey: "resH_\(gid)") as? Int ?? 0
-                let resStr = (savedW > 0 && savedH > 0) ? "\(savedW)×\(savedH)" : "Tự Động"
+                let resStr = (savedW > 0 && savedH > 0) ? "\(savedW)×\(savedH)" : "Theo Form Game"
 
                 return (appName, jar.path, fileName, meta?.version, meta?.vendor, jarIcon, sizeString, resStr)
             }

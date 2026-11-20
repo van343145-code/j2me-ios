@@ -12,9 +12,7 @@ import javax.microedition.midlet.MIDlet;
  */
 public class Display {
     private static Display instance;
-    private static volatile boolean isHandlingCommandAction = false;
-    private static volatile long lastUserCommandTime = 0;
-    private Displayable current;
+    private volatile Displayable current;
     private volatile boolean running;
     private static final EventQueue eventQueue = new EventQueue();
     private MIDlet currentMIDlet;
@@ -33,7 +31,7 @@ public class Display {
     private Display() {
     }
 
-    public static Display getDisplay(MIDlet midlet) {
+    public static synchronized Display getDisplay(MIDlet midlet) {
         if (instance == null) {
             instance = new Display();
         }
@@ -43,9 +41,12 @@ public class Display {
         return instance;
     }
 
-    public void setCurrent(Displayable d) {
+    public synchronized void setCurrent(Displayable d) {
         if (d == null) return;
         Displayable old = current;
+        if (d instanceof Alert && old != d && ((Alert) d).nextDisplayable == null) {
+            ((Alert) d).nextDisplayable = old instanceof Alert ? ((Alert) old).nextDisplayable : old;
+        }
         current = d;
 
         boolean resized = (d.width != screenWidth || d.height != screenHeight);
@@ -68,7 +69,19 @@ public class Display {
             canvas.initContext();
             canvas.repaintPending = true;
             canvas.showNotify();
-        } else if (d instanceof Form) {
+        } else {
+            refresh(d);
+        }
+
+        if (old instanceof Canvas && old != d && current != old) {
+            ((Canvas) old).hideNotify();
+            // Keep the canvas graphics context for background game threads.
+        }
+    }
+
+    synchronized void refresh(Displayable d) {
+        if (d != current) return;
+        if (d instanceof Form) {
             ((Form) d).showNative();
         } else if (d instanceof List) {
             ((List) d).showNative();
@@ -77,18 +90,19 @@ public class Display {
         } else if (d instanceof Alert) {
             ((Alert) d).showNative();
         }
-
-        if (old instanceof Canvas && old != d) {
-            ((Canvas) old).hideNotify();
-            // Do NOT destroyContext() here: background game threads continue running
-            // while Forms/Lists are presented. Destroying nativeContext causes null pointer/crashes
-            // in game thread repaints, forcing MIDlets to abort back to the Canvas.
-        }
     }
 
-    public void setCurrent(Alert alert, Displayable nextDisplayable) {
+    public synchronized void setCurrent(Alert alert, Displayable nextDisplayable) {
         alert.nextDisplayable = nextDisplayable;
         setCurrent(alert);
+    }
+
+    private synchronized void dismissAlert(Alert alert) {
+        if (current == alert && alert.nextDisplayable != null) {
+            Displayable next = alert.nextDisplayable;
+            alert.nextDisplayable = null;
+            setCurrent(next);
+        }
     }
 
     public Displayable getCurrent() {
@@ -178,43 +192,25 @@ public class Display {
                                      type == 4 ? CanvasEvent.KEY_RELEASED : CanvasEvent.KEY_REPEATED;
                         Display.eventQueue.postEvent(CanvasEvent.getInstance(c, ceType, nativeEvent[3]));
                     } else if (type == 10) {
-                        lastUserCommandTime = System.currentTimeMillis();
                         int cmdId = nativeEvent[3];
-                        if (current instanceof TextBox) {
-                            try {
-                                String txt = NativeBridge.getTextBoxText();
-                                if (txt != null) {
-                                    ((TextBox) current).setString(txt);
-                                }
-                            } catch (Throwable t) {
-                                System.out.println("[Display] Error reading TextBox text: " + t);
-                            }
-                        } else if (current instanceof Form) {
-                            try {
-                                ((Form) current).syncFromNative();
-                            } catch (Throwable t) {
-                                System.out.println("[Display] Error syncing Form text: " + t);
-                            }
-                        }
-                        isHandlingCommandAction = true;
-                        try {
-                            if (current != null) current.fireCommandAction(cmdId);
-                        } finally {
-                            isHandlingCommandAction = false;
+                        Displayable target = current;
+                        Command command = target == null ? null : target.getCommandAt(cmdId);
+                        if (target instanceof Alert && command == null && cmdId == 0
+                                && target.getCommands().isEmpty()) {
+                            dismissAlert((Alert) target);
+                        } else if (command != null) {
+                            if (target instanceof TextBox) ((TextBox) target).syncFromNative();
+                            if (target instanceof Form) ((Form) target).syncFromNative();
+                            target.fireCommandAction(command);
                         }
                     } else if (type == 11 && current instanceof List) {
-                        lastUserCommandTime = System.currentTimeMillis();
-                        isHandlingCommandAction = true;
-                        try {
-                            ((List) current).handleListSelect(nativeEvent[3]);
-                        } finally {
-                            isHandlingCommandAction = false;
-                        }
+                        ((List) current).handleListSelect(nativeEvent[3]);
                     } else if (type == 12 && current instanceof Alert) {
-                        Alert alert = (Alert) current;
-                        if (alert.nextDisplayable != null) setCurrent(alert.nextDisplayable);
+                        dismissAlert((Alert) current);
                     } else if (type == 13 && current instanceof List) {
                         ((List) current).setSelectedIndex(nativeEvent[3], true);
+                    } else if (type == 14 && current instanceof Form) {
+                        ((Form) current).syncFromNative();
                     }
                 } catch (Throwable t) {
                     System.out.println("[Display] Error handling input event: " + t);

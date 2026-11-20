@@ -1,8 +1,7 @@
 //
 // j2me_input.c — Thread-safe input event bridge between iOS and miniJVM
 //
-// Uses a lock-free ring buffer for single-producer (iOS main thread)
-// single-consumer (JVM thread) communication.
+// The touch UI and virtual keyboard may submit events on separate threads.
 //
 
 #include "j2me_input.h"
@@ -10,7 +9,7 @@
 #include "jvm.h"
 #include "jvm_util.h"
 #include <stdio.h>
-#include <stdatomic.h>
+#include <pthread.h>
 
 // ============================================================
 // Ring buffer
@@ -23,11 +22,13 @@ typedef struct {
     int type;
     int x, y;
     int keyCode;
+    int slot;
 } InputEvent;
 
 static InputEvent g_queue[INPUT_QUEUE_SIZE];
-static atomic_int g_write_pos = 0;
-static atomic_int g_read_pos = 0;
+static int g_write_pos;
+static int g_read_pos;
+static pthread_mutex_t g_input_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static int g_canvas_width = 240;
 static int g_canvas_height = 320;
@@ -38,34 +39,32 @@ void j2me_input_set_canvas_size(int width, int height) {
 }
 
 static void enqueue_event(int type, int x, int y, int keyCode) {
-    int wp = atomic_load_explicit(&g_write_pos, memory_order_relaxed);
-    int next_wp = (wp + 1) & INPUT_QUEUE_MASK;
-    int rp = atomic_load_explicit(&g_read_pos, memory_order_acquire);
-
-    if (next_wp == rp) {
-        // Queue full — drop event
-        return;
+    int slot = jvm_bridge_get_focused_slot();
+    pthread_mutex_lock(&g_input_lock);
+    int next = (g_write_pos + 1) & INPUT_QUEUE_MASK;
+    if (next != g_read_pos) {
+        g_queue[g_write_pos] = (InputEvent){type, x, y, keyCode, slot};
+        g_write_pos = next;
     }
-
-    g_queue[wp].type = type;
-    g_queue[wp].x = x;
-    g_queue[wp].y = y;
-    g_queue[wp].keyCode = keyCode;
-
-    atomic_store_explicit(&g_write_pos, next_wp, memory_order_release);
+    pthread_mutex_unlock(&g_input_lock);
 }
 
-static int dequeue_event(InputEvent *out) {
-    int rp = atomic_load_explicit(&g_read_pos, memory_order_relaxed);
-    int wp = atomic_load_explicit(&g_write_pos, memory_order_acquire);
-
-    if (rp == wp) {
-        return 0; // Empty
+static int dequeue_event(int slot, InputEvent *out) {
+    int found = 0;
+    pthread_mutex_lock(&g_input_lock);
+    if (slot == jvm_bridge_get_focused_slot()) {
+        while (g_read_pos != g_write_pos) {
+            InputEvent event = g_queue[g_read_pos];
+            g_read_pos = (g_read_pos + 1) & INPUT_QUEUE_MASK;
+            if (event.slot == slot) {
+                *out = event;
+                found = 1;
+                break;
+            }
+        }
     }
-
-    *out = g_queue[rp];
-    atomic_store_explicit(&g_read_pos, (rp + 1) & INPUT_QUEUE_MASK, memory_order_release);
-    return 1;
+    pthread_mutex_unlock(&g_input_lock);
+    return found;
 }
 
 // ============================================================
@@ -89,14 +88,14 @@ static s32 n_pollInputEvent(Runtime *runtime, JClass *clazz) {
     JniEnv *env = runtime->jnienv;
 
     // Only the currently focused slot consumes input events from the UI
-    int slot = jvm_bridge_get_jvm_slot(runtime->jvm);
+    int slot = jvm_bridge_find_jvm_slot(runtime->jvm);
     if (slot != jvm_bridge_get_focused_slot()) {
         env->push_ref(runtime->stack, NULL);
         return RUNTIME_STATUS_NORMAL;
     }
 
     InputEvent evt;
-    if (!dequeue_event(&evt)) {
+    if (!dequeue_event(slot, &evt)) {
         env->push_ref(runtime->stack, NULL);
         return RUNTIME_STATUS_NORMAL;
     }
@@ -137,8 +136,10 @@ static s32 n_isStopRequested(Runtime *runtime, JClass *clazz) {
 // ============================================================
 
 void j2me_input_reset(void) {
-    atomic_store_explicit(&g_write_pos, 0, memory_order_relaxed);
-    atomic_store_explicit(&g_read_pos, 0, memory_order_relaxed);
+    pthread_mutex_lock(&g_input_lock);
+    g_write_pos = 0;
+    g_read_pos = 0;
+    pthread_mutex_unlock(&g_input_lock);
     printf("[J2ME Input] Ring buffer reset\n");
 }
 

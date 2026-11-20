@@ -51,7 +51,7 @@ class GameViewController: UIViewController {
 
         DispatchQueue.main.async {
             guard let vc = activeGameViewController,
-                  vc.activeTabIndex == slot else { return }
+                  vc.activeSlot == slot else { return }
             if UIApplication.shared.applicationState == .active {
                 vc.isAppInBackground = false
             }
@@ -73,7 +73,7 @@ class GameViewController: UIViewController {
     }
 
     static func purgeInactiveSlotFrames() {
-        let activeIdx = activeGameViewController?.activeTabIndex ?? -1
+        let activeIdx = Int(jvm_bridge_get_focused_slot())
         slotFrameLock.lock()
         let keysToDrop = slotFrames.keys.filter { $0 != activeIdx }
         for k in keysToDrop {
@@ -126,11 +126,14 @@ class GameViewController: UIViewController {
         var saveRoot: String
         var icon: UIImage?
         var screenshot: UIImage?
-        var activeUI: Int = 0 // 0 = Canvas, 1 = Form, 2 = List, 3 = TextBox
     }
     var tabSessions: [TabSession] = []
     var tabButtons: [UIButton] = []
     var activeTabIndex: Int = 0
+    private var tabWorkerSlots: Set<Int> = []
+    private var activeSlot: Int {
+        tabSessions.indices.contains(activeTabIndex) ? tabSessions[activeTabIndex].slotIndex : 0
+    }
 
     // Quick floating unhide keypad button
     private let floatingShowKeypadBtn = UIButton(type: .system)
@@ -183,6 +186,7 @@ class GameViewController: UIViewController {
     }
 
     private var alertTimeoutWork: DispatchWorkItem?
+    private weak var nativeAlert: UIAlertController?
 
     override var prefersStatusBarHidden: Bool { false }
     override var preferredStatusBarStyle: UIStatusBarStyle { .darkContent }
@@ -215,11 +219,6 @@ class GameViewController: UIViewController {
         }
         if let fill = UserDefaults.standard.object(forKey: "decade_fill_screen_\(legacyGameId)") as? Bool {
             return !fill
-        }
-        let savedW = UserDefaults.standard.object(forKey: "resW_\(currentGameId)") as? Int ?? 0
-        let savedH = UserDefaults.standard.object(forKey: "resH_\(currentGameId)") as? Int ?? 0
-        if savedW == 0 || savedH == 0 {
-            return false // "Tự Động": Kín màn hình mặc định
         }
         if let val = UserDefaults.standard.object(forKey: "aspect_\(currentGameId)") as? Bool {
             return val
@@ -276,9 +275,8 @@ class GameViewController: UIViewController {
         }
 
         // Apply saved configuration: Aspect ratio & Forced Fullscreen
-        let isAuto = (savedW == 0 || savedH == 0)
-        let isForceFullscreen = isForceFullscreenEnabled
-        emulatorView.isAspectFit = isAuto ? false : (isForceFullscreen ? false : isAspectFitEnabled)
+        let isForceFill = isForceFullscreenEnabled || !isAspectFitEnabled
+        emulatorView.isAspectFit = !isForceFill
 
         if isForceFullscreen || isKeypadHidden {
             decadeKeypadView?.isHidden = true
@@ -368,7 +366,7 @@ class GameViewController: UIViewController {
         isAppInBackground = false
         j2me_render_set_background(0)
         j2me_input_post_key(0, 0)
-        if let img = GameViewController.slotFrames[self.activeTabIndex] {
+        if let img = GameViewController.slotFrames[self.activeSlot] {
             self.emulatorView.displayImage(img)
         }
     }
@@ -685,9 +683,14 @@ class GameViewController: UIViewController {
     }
 
     private func closeTab(at index: Int) {
-        guard index > 0 && index < tabButtons.count else { return }
-        jvm_bridge_request_stop_slot(Int32(index))
-        jvm_bridge_destroy_slot(Int32(index))
+        guard index > 0 && tabSessions.indices.contains(index) else { return }
+        let slot = tabSessions[index].slotIndex
+        let previousSlot = activeSlot
+        if slot == previousSlot {
+            view.endEditing(true)
+            dismissNativeAlert()
+        }
+        jvm_bridge_request_stop_slot(Int32(slot))
 
         let btn = tabButtons[index]
         btn.removeFromSuperview()
@@ -697,7 +700,7 @@ class GameViewController: UIViewController {
         }
 
         GameViewController.slotFrameLock.lock()
-        GameViewController.slotFrames.removeValue(forKey: index)
+        GameViewController.slotFrames.removeValue(forKey: slot)
         GameViewController.slotFrameLock.unlock()
 
         for (i, b) in tabButtons.enumerated() {
@@ -705,7 +708,9 @@ class GameViewController: UIViewController {
             b.setTitle("\(i + 1)", for: .normal)
         }
 
-        let newActive = min(activeTabIndex, tabButtons.count - 1)
+        let newActive = tabSessions.firstIndex(where: { $0.slotIndex == previousSlot })
+            ?? min(index, tabButtons.count - 1)
+        activeTabIndex = newActive
         selectTab(at: newActive)
         showToast(message: "Đã đóng Tab \(index + 1)")
     }
@@ -716,22 +721,16 @@ class GameViewController: UIViewController {
         // Capture screenshot and UI state of current tab before switching
         if activeTabIndex != index && activeTabIndex < tabSessions.count {
             tabSessions[activeTabIndex].screenshot = takeSnapshot()
-            if !formView.isHidden {
-                tabSessions[activeTabIndex].activeUI = 1
-            } else if !listView.isHidden {
-                tabSessions[activeTabIndex].activeUI = 2
-            } else if !textBoxView.isHidden {
-                tabSessions[activeTabIndex].activeUI = 3
-            } else {
-                tabSessions[activeTabIndex].activeUI = 0
-            }
+            if !formView.isHidden { formView.syncAllTextFields() }
+            view.endEditing(true)
+            dismissNativeAlert()
         }
 
         activeTabIndex = index
         let session = (index < tabSessions.count) ? tabSessions[index] : tabSessions.first!
 
         // Switch focused slot in JVM bridge (switches display rendering & input routing)
-        jvm_bridge_set_focused_slot(Int32(index))
+        jvm_bridge_set_focused_slot(Int32(session.slotIndex))
 
         // Dynamically update save root for data isolation (-tabN)
         session.saveRoot.withCString { cstr in
@@ -766,18 +765,11 @@ class GameViewController: UIViewController {
         decadeKeypadView?.isHidden = isKeypadHidden
         floatingShowKeypadBtn.isHidden = isForceFullscreenEnabled || !isKeypadHidden
 
-        // Restore active UI state for this tab
-        if session.activeUI == 1 {
-            showFormView()
-        } else if session.activeUI == 2 {
-            showListView()
-        } else if session.activeUI == 3 {
-            showTextBoxView()
-        } else {
-            showCanvasView()
+        j2me_ui_restore_focused_screen()
+        if !emulatorView.isHidden {
             // Immediately isolate and show this tab's frame!
             GameViewController.slotFrameLock.lock()
-            let cachedFrame = GameViewController.slotFrames[index]
+            let cachedFrame = GameViewController.slotFrames[session.slotIndex]
             GameViewController.slotFrameLock.unlock()
 
             if let frame = cachedFrame {
@@ -798,8 +790,8 @@ class GameViewController: UIViewController {
     }
 
     private func addNewTab(jarPath: String, appName: String, icon: UIImage) {
-        let newSlot = tabButtons.count
-        guard newSlot < 32 else {
+        let usedSlots = Set(tabSessions.map { $0.slotIndex }).union(tabWorkerSlots)
+        guard let newSlot = (0..<32).first(where: { !usedSlots.contains($0) }) else {
             showToast(message: "Đã đạt tối đa 32 tab")
             return
         }
@@ -825,18 +817,22 @@ class GameViewController: UIViewController {
             gameId: gid,
             saveRoot: saveRoot,
             icon: icon,
-            screenshot: nil,
-            activeUI: 0
+            screenshot: nil
         )
+        let tabIndex = tabSessions.count
         tabSessions.append(session)
-        createTabButton(index: newSlot)
+        createTabButton(index: tabIndex)
 
         if newSlot == 0 {
             selectTab(at: 0)
         } else {
+            tabWorkerSlots.insert(newSlot)
             // Real Multi-Tab Execution: Launch independent MiniJVM instance for newSlot!
             DispatchQueue.global(qos: .userInitiated).async { [weak self] in
                 guard let self = self else { return }
+                defer {
+                    DispatchQueue.main.async { self.tabWorkerSlots.remove(newSlot) }
+                }
                 guard let resRoot = Bundle.main.resourcePath else { return }
                 DecadeProxyManager.shared.syncToNative(appId: appName, slot: newSlot)
                 DecadeChangeIpViewController.syncToNative()
@@ -854,17 +850,21 @@ class GameViewController: UIViewController {
                     print("[Swift] ERROR: Slot \(newSlot) JVM init failed with code \(initResult)")
                     return
                 }
+                defer { jvm_bridge_destroy_slot(Int32(newSlot)) }
+                let isOpen = DispatchQueue.main.sync {
+                    self.tabSessions.contains { $0.slotIndex == newSlot }
+                }
+                guard isOpen else { return }
                 print("[Swift] Slot \(newSlot) MiniJVM running midlet: \(jarPath)")
                 let runResult = jvm_bridge_run_midlet_slot(Int32(newSlot), jarPath)
                 print("[Swift] Slot \(newSlot) MiniJVM completed with code \(runResult)")
-                jvm_bridge_destroy_slot(Int32(newSlot))
             }
 
-            selectTab(at: newSlot)
+            selectTab(at: tabIndex)
         }
 
         let folderName = URL(fileURLWithPath: saveRoot).lastPathComponent
-        showToast(message: "Đã thêm Tab \(newSlot + 1): \(appName)\n(Thư mục data: \(folderName))")
+        showToast(message: "Đã thêm Tab \(tabIndex + 1): \(appName)\n(Thư mục data: \(folderName))")
     }
 
     @objc private func addTabTapped() {
@@ -1051,10 +1051,10 @@ class GameViewController: UIViewController {
         self.canvasHeight = targetSize.1
         self.emulatorView.canvasWidth = targetSize.0
         self.emulatorView.canvasHeight = targetSize.1
-        let isAuto = (savedW == 0 || savedH == 0)
-        self.emulatorView.isAspectFit = isAuto ? false : (self.isForceFullscreenEnabled ? false : self.isAspectFitEnabled)
+        let isForceFill = self.isForceFullscreenEnabled || !self.isAspectFitEnabled
+        self.emulatorView.isAspectFit = !isForceFill
 
-        let slot = Int32(self.activeTabIndex)
+        let slot = Int32(self.activeSlot)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             jvm_bridge_request_stop_slot(slot)
@@ -1136,7 +1136,7 @@ class GameViewController: UIViewController {
         // Request immediate frame redraw upon unlock
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            if let img = GameViewController.slotFrames[self.activeTabIndex] {
+            if let img = GameViewController.slotFrames[self.activeSlot] {
                 self.emulatorView.displayImage(img)
             }
             j2me_input_post_key(0, 0)
@@ -1154,9 +1154,8 @@ class GameViewController: UIViewController {
         let savedH = UserDefaults.standard.object(forKey: "resH_\(currentGameId)") as? Int ?? 0
         let targetSize = (savedW > 0 && savedH > 0) ? (savedW, savedH) : calculateAutoCanvasSize()
 
-        let isAuto = (savedW == 0 || savedH == 0)
-        let isForceFullscreen = isForceFullscreenEnabled
-        emulatorView.isAspectFit = isAuto ? false : (isForceFullscreen ? false : isAspectFitEnabled)
+        let isForceFill = isForceFullscreenEnabled || !isAspectFitEnabled
+        emulatorView.isAspectFit = !isForceFill
 
         let savedLayout = (UserDefaults.standard.object(forKey: "keypad_layout_\(currentGameId)") as? Int) ??
                           (UserDefaults.standard.object(forKey: "keypad_layout_\(legacyGameId)") as? Int) ?? 0
@@ -1911,6 +1910,7 @@ class GameViewController: UIViewController {
     // ============================================================
 
     func showCanvasView() {
+        dismissNativeAlert()
         let currentTabName = (activeTabIndex < tabSessions.count) ? tabSessions[activeTabIndex].appName : appName
         titleLabel.text = currentTabName
         emulatorView.isHidden = false
@@ -1922,11 +1922,12 @@ class GameViewController: UIViewController {
     }
 
     func showTextBoxView() {
+        dismissNativeAlert()
         let formTitle = String(cString: j2me_ui_get_form_title())
         titleLabel.text = formTitle.isEmpty ? "Tài khoản" : formTitle
         textBoxView.buildFromNativeData()
         textBoxView.isHidden = false
-        emulatorView.isHidden = true
+        emulatorView.isHidden = false
         decadeKeypadView?.isHidden = true
         floatingShowKeypadBtn.isHidden = true
         formView.isHidden = true
@@ -1935,11 +1936,12 @@ class GameViewController: UIViewController {
     }
 
     func showFormView() {
+        dismissNativeAlert()
         let formTitle = String(cString: j2me_ui_get_form_title())
         titleLabel.text = formTitle.isEmpty ? appName : formTitle
         formView.buildFromNativeData()
         formView.isHidden = false
-        emulatorView.isHidden = true
+        emulatorView.isHidden = false
         decadeKeypadView?.isHidden = true
         floatingShowKeypadBtn.isHidden = true
         textBoxView.isHidden = true
@@ -1948,11 +1950,12 @@ class GameViewController: UIViewController {
     }
 
     func showListView() {
+        dismissNativeAlert()
         let formTitle = String(cString: j2me_ui_get_form_title())
         titleLabel.text = formTitle.isEmpty ? "Menu" : formTitle
         listView.buildFromNativeData()
         listView.isHidden = false
-        emulatorView.isHidden = true
+        emulatorView.isHidden = false
         decadeKeypadView?.isHidden = true
         floatingShowKeypadBtn.isHidden = true
         textBoxView.isHidden = true
@@ -1960,18 +1963,29 @@ class GameViewController: UIViewController {
         view.bringSubviewToFront(listView)
     }
 
+    private func dismissNativeAlert() {
+        alertTimeoutWork?.cancel()
+        alertTimeoutWork = nil
+        nativeAlert?.dismiss(animated: false)
+        nativeAlert = nil
+    }
+
     func showAlert() {
+        dismissNativeAlert()
+        let slot = jvm_bridge_get_focused_slot()
+        let revision = j2me_ui_screen_revision(slot)
+        let isCurrentScreen = {
+            jvm_bridge_get_focused_slot() == slot && j2me_ui_screen_revision(slot) == revision
+        }
         let title = String(cString: j2me_ui_get_form_title())
         let text = String(cString: j2me_ui_get_alert_text())
 
         let alert = UIAlertController(title: title, message: text, preferredStyle: .alert)
 
-        alertTimeoutWork?.cancel()
-        alertTimeoutWork = nil
-
         let cmdCount = j2me_ui_get_command_count()
         if cmdCount == 0 {
             alert.addAction(UIAlertAction(title: "OK", style: .default) { [weak self] _ in
+                guard isCurrentScreen() else { return }
                 self?.alertTimeoutWork?.cancel()
                 j2me_input_post_key(Int32(J2ME_UI_ALERT_DISMISSED), 0)
             })
@@ -1980,20 +1994,24 @@ class GameViewController: UIViewController {
                 let label = String(cString: j2me_ui_get_command_label(Int32(i)))
                 let cmdId = j2me_ui_get_command_id(Int32(i))
                 alert.addAction(UIAlertAction(title: label, style: .default) { [weak self] _ in
+                    guard isCurrentScreen() else { return }
                     self?.alertTimeoutWork?.cancel()
                     j2me_input_post_key(Int32(J2ME_UI_COMMAND_ACTION), cmdId)
                 })
             }
         }
 
-        present(alert, animated: true)
+        if let presenter = view.topMostPresentedViewController {
+            presenter.present(alert, animated: true)
+            nativeAlert = alert
+        }
 
         let timeout = j2me_ui_get_alert_timeout()
         if timeout > 0 {
             let work = DispatchWorkItem { [weak alert] in
-                alert?.dismiss(animated: true) {
-                    j2me_input_post_key(Int32(J2ME_UI_ALERT_DISMISSED), 0)
-                }
+                guard isCurrentScreen() else { return }
+                alert?.dismiss(animated: true)
+                j2me_input_post_key(Int32(J2ME_UI_ALERT_DISMISSED), 0)
             }
             alertTimeoutWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + Double(timeout) / 1000.0, execute: work)
@@ -2283,16 +2301,14 @@ class GameViewController: UIViewController {
 private(set) weak var activeGameViewController: GameViewController?
 
 let gameUICallback: @convention(c) (Int32, UnsafePointer<CChar>?) -> Void = { action, data in
-    DispatchQueue.main.async {
-        guard let vc = activeGameViewController else { return }
-        switch action {
-        case Int32(J2ME_UI_ACTION_SHOW_CANVAS):  vc.showCanvasView()
-        case Int32(J2ME_UI_ACTION_SHOW_FORM):    vc.showFormView()
-        case Int32(J2ME_UI_ACTION_SHOW_LIST):    vc.showListView()
-        case Int32(J2ME_UI_ACTION_SHOW_ALERT):   vc.showAlert()
-        case Int32(J2ME_UI_ACTION_SHOW_TEXTBOX): vc.showTextBoxView()
-        default: break
-        }
+    guard let vc = activeGameViewController else { return }
+    switch action {
+    case Int32(J2ME_UI_ACTION_SHOW_CANVAS):  vc.showCanvasView()
+    case Int32(J2ME_UI_ACTION_SHOW_FORM):    vc.showFormView()
+    case Int32(J2ME_UI_ACTION_SHOW_LIST):    vc.showListView()
+    case Int32(J2ME_UI_ACTION_SHOW_ALERT):   vc.showAlert()
+    case Int32(J2ME_UI_ACTION_SHOW_TEXTBOX): vc.showTextBoxView()
+    default: break
     }
 }
 

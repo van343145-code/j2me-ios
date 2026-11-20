@@ -20,7 +20,7 @@ class DecadeConfigViewController: UIViewController {
     // State for Màn Hình
     private var selectedScreenSizeIndex: Int = 0
     private let screenSizes: [(label: String, w: Int, h: Int)] = [
-        ("Tự Động", 0, 0),
+        ("Theo Form Game", 0, 0),
         ("240 × 320", 240, 320),
         ("320 × 240", 320, 240),
         ("360 × 640", 360, 640),
@@ -199,7 +199,7 @@ class DecadeConfigViewController: UIViewController {
             iconBg: UIColor(red: 0.88, green: 0.95, blue: 0.88, alpha: 1.0),
             iconTint: UIColor(red: 0.18, green: 0.50, blue: 0.20, alpha: 1.0),
             title: "Cỡ Màn Hình",
-            subtitle: "Tự Động Kín Màn, Không Méo"
+            subtitle: "Chuẩn Form Game Gốc, Không Méo Hình"
         )
         cardStack.addArrangedSubview(sizeRowHeader)
 
@@ -231,13 +231,13 @@ class DecadeConfigViewController: UIViewController {
         // Divider
         cardStack.addArrangedSubview(makeDivider())
 
-        // Row 1b: Kín Toàn Màn Hình (Không Viền Đen)
+        // Row 1b: Co Giãn Kín Màn Hình
         let fillRow = makeToggleRow(
             icon: "aspectratio",
             iconBg: UIColor(red: 0.88, green: 0.95, blue: 0.88, alpha: 1.0),
             iconTint: UIColor(red: 0.18, green: 0.50, blue: 0.20, alpha: 1.0),
-            title: "Kín Màn Hình (Không Viền Đen)",
-            subtitle: "Tự động co giãn kín toàn khung hiển thị",
+            title: "Co Giãn Kín Màn Hình",
+            subtitle: "Tắt: Giữ form gốc game · Bật: Ép kín màn",
             toggle: fillScreenSwitch,
             action: #selector(fillScreenSwitchChanged(_:))
         )
@@ -632,9 +632,6 @@ class DecadeConfigViewController: UIViewController {
         for (idx, btn) in screenSizeButtons.enumerated() {
             btn.isSelectedState = (idx == selectedScreenSizeIndex)
         }
-        if selectedScreenSizeIndex == 0 {
-            fillScreenSwitch.setOn(true, animated: true)
-        }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
         saveValues()
     }
@@ -804,9 +801,9 @@ class DecadeConfigViewController: UIViewController {
         // Treo định vị BTS: Tiết kiệm pin tối đa
         locationModeSwitch.isOn = DecadeLocationKeeper.shared.isLocationModeActive
 
-        // Kín Màn Hình (Mặc định TRUE khi chọn Tự Động hoặc nếu chưa đặt)
+        // Co Giãn Kín Màn Hình: Mặc định tắt (FALSE) để giữ chuẩn form game gốc không méo hình
         let savedFill = defaults.object(forKey: "decade_fill_screen_\(gid)") as? Bool
-            ?? (savedW == 0 && savedH == 0 ? true : !(defaults.bool(forKey: "aspect_\(gid)")))
+            ?? !(defaults.object(forKey: "aspect_\(gid)") as? Bool ?? true)
         fillScreenSwitch.isOn = savedFill
 
         // Tự động dọn RAM: Mặc định luôn là TRUE

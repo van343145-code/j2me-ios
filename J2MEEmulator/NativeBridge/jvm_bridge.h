@@ -41,6 +41,7 @@ int jvm_bridge_get_focused_slot(void);
 
 /// Determine which slot index owns the given MiniJVM pointer.
 int jvm_bridge_get_jvm_slot(void *jvm_ptr);
+int jvm_bridge_find_jvm_slot(void *jvm_ptr);
 
 // ============================================================
 // Slot control & status

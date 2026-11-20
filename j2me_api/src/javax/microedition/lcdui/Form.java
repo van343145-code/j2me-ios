@@ -5,6 +5,8 @@ import java.util.ArrayList;
 public class Form extends Screen {
     private ArrayList<Item> items = new ArrayList<Item>();
     private ItemStateListener itemStateListener;
+    private boolean dispatchingNativeEdits;
+    private boolean nativeUpdatePending;
 
     public Form(String title) {
         setTitle(title);
@@ -21,7 +23,7 @@ public class Form extends Screen {
         if (item == null) throw new NullPointerException();
         item.owner = this;
         items.add(item);
-        if (isShown()) showNative();
+        requestNativeRefresh();
         return items.size() - 1;
     }
 
@@ -36,65 +38,97 @@ public class Form extends Screen {
     public void insert(int index, Item item) {
         item.owner = this;
         items.add(index, item);
-        if (isShown()) showNative();
+        requestNativeRefresh();
     }
 
     public void set(int index, Item item) {
         item.owner = this;
-        items.set(index, item);
-        if (isShown()) showNative();
+        Item old = items.set(index, item);
+        if (old != item && old.owner == this) old.owner = null;
+        requestNativeRefresh();
     }
 
     public void delete(int index) {
-        items.remove(index);
-        if (isShown()) showNative();
+        Item old = items.remove(index);
+        if (old.owner == this) old.owner = null;
+        requestNativeRefresh();
     }
 
     public void deleteAll() {
+        for (Item item : items) {
+            if (item.owner == this) item.owner = null;
+        }
         items.clear();
-        if (isShown()) showNative();
+        requestNativeRefresh();
     }
     public int size() { return items.size(); }
     public Item get(int index) { return items.get(index); }
     public void setItemStateListener(ItemStateListener listener) { itemStateListener = listener; }
 
     public void syncFromNative() {
-        for (int i = 0; i < items.size(); i++) {
-            Item item = items.get(i);
+        Item[] visibleItems = items.toArray(new Item[items.size()]);
+        Item[] changedItems = new Item[visibleItems.length];
+        int changedCount = 0;
+        for (int i = 0; i < visibleItems.length; i++) {
+            Item item = visibleItems[i];
             if (item instanceof TextField) {
-                String val = NativeBridge.getFormItemText(i);
-                if (val != null) {
-                    ((TextField) item).setString(val);
-                    notifyItemStateChanged(item);
-                }
+                TextField field = (TextField) item;
+                String value = NativeBridge.getFormItemText(i);
+                if (value == null || (field.getConstraints() & TextField.UNEDITABLE) != 0) continue;
+                if (field.applyValue(value)) changedItems[changedCount++] = field;
             } else if (item instanceof ChoiceGroup) {
-                ChoiceGroup cg = (ChoiceGroup) item;
-                String val = NativeBridge.getFormItemText(i);
-                if (val != null && val.length() > 0) {
-                    try {
-                        String[] parts = val.split("\n");
-                        if (cg.choiceType == Choice.EXCLUSIVE || cg.choiceType == Choice.POPUP) {
-                            if (parts.length >= 1 && parts[0].trim().length() > 0) {
-                                int selIdx = Integer.parseInt(parts[0].trim());
-                                if (selIdx >= 0 && selIdx < cg.size()) {
-                                    cg.setSelectedIndex(selIdx, true);
-                                }
-                            }
-                        } else {
-                            // Choice.MULTIPLE
-                            if (parts.length >= 3) {
-                                String[] flags = parts[2].split(",");
-                                for (int f = 0; f < flags.length && f < cg.size(); f++) {
-                                    cg.setSelectedIndex(f, "1".equals(flags[f].trim()));
-                                }
-                            }
-                        }
-                        notifyItemStateChanged(item);
-                    } catch (Throwable t) {
-                    }
+                if (applyNativeChoice((ChoiceGroup) item, NativeBridge.getFormItemText(i))) {
+                    changedItems[changedCount++] = item;
                 }
             }
         }
+
+        // Item listeners can repopulate the form and replace the native rows.
+        // Deliver those callbacks only after every visible value has been copied.
+        if (changedCount == 0 || itemStateListener == null) return;
+        dispatchingNativeEdits = true;
+        try {
+            for (int i = 0; i < changedCount; i++) {
+                if (items.contains(changedItems[i])) notifyItemStateChanged(changedItems[i]);
+            }
+        } finally {
+            dispatchingNativeEdits = false;
+            if (nativeUpdatePending) {
+                nativeUpdatePending = false;
+                requestNativeRefresh();
+            }
+        }
+    }
+
+    private boolean applyNativeChoice(ChoiceGroup choice, String value) {
+        if (value == null) return false;
+        int firstBreak = value.indexOf('\n');
+        if (firstBreak < 0) return false;
+        if (choice.choiceType != Choice.MULTIPLE) {
+            try {
+                int index = Integer.parseInt(value.substring(0, firstBreak).trim());
+                if (index < 0 || index >= choice.size() || index == choice.getSelectedIndex()) return false;
+                choice.setSelectedIndex(index, true);
+                return true;
+            } catch (NumberFormatException invalidIndex) {
+                return false;
+            }
+        }
+
+        int flagsStart = value.indexOf('\n', firstBreak + 1);
+        if (flagsStart < 0) return false;
+        String[] flags = value.substring(flagsStart + 1).split(",");
+        if (flags.length != choice.size()) return false;
+        boolean[] selected = new boolean[flags.length];
+        boolean changed = false;
+        for (int i = 0; i < flags.length; i++) {
+            String flag = flags[i].trim();
+            if (!"0".equals(flag) && !"1".equals(flag)) return false;
+            selected[i] = "1".equals(flag);
+            changed |= selected[i] != choice.isSelected(i);
+        }
+        if (changed) choice.setSelectedFlags(selected);
+        return changed;
     }
 
     void notifyItemStateChanged(Item item) {
@@ -103,6 +137,10 @@ public class Form extends Screen {
 
     /** Serialize form to native bridge and show it. */
     public void showNative() {
+        if (dispatchingNativeEdits) {
+            nativeUpdatePending = true;
+            return;
+        }
         NativeBridge.formBegin(getTitle(), 0); // type 0 = form
         for (Item item : items) {
             int type = item.getItemType();

@@ -28,11 +28,17 @@ public class TextField extends Item {
 
     public String getString() { return text; }
     public void setString(String text) {
+        if (applyValue(text) && owner != null) owner.requestNativeRefresh();
+    }
+
+    boolean applyValue(String text) {
         String val = (text != null) ? text : "";
         if (maxSize > 0 && val.length() > maxSize) {
             val = val.substring(0, maxSize);
         }
+        if (val.equals(this.text)) return false;
         this.text = val;
+        return true;
     }
     public int getChars(char[] data) {
         if (data == null) throw new NullPointerException();
@@ -43,7 +49,7 @@ public class TextField extends Item {
     }
     public void setChars(char[] data, int offset, int length) {
         if (data == null) {
-            this.text = "";
+            setString("");
             return;
         }
         setString(new String(data, offset, length));

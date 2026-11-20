@@ -41,12 +41,16 @@ class J2METextBoxView: UIView, UITextViewDelegate {
 
     private func setup() {
         overrideUserInterfaceStyle = .light
-        backgroundColor = UIColor(red: 0.96, green: 0.97, blue: 0.98, alpha: 1.0)
+        backgroundColor = UIColor(red: 0.07, green: 0.09, blue: 0.12, alpha: 0.90) // Translucent dark overlay
 
-        // White editing canvas
+        // Dark gaming editing canvas
         textView.font = .systemFont(ofSize: 18)
-        textView.textColor = .black
-        textView.backgroundColor = .white
+        textView.textColor = .white
+        textView.backgroundColor = UIColor(red: 0.12, green: 0.15, blue: 0.20, alpha: 0.95)
+        textView.layer.cornerRadius = 12
+        textView.layer.borderWidth = 1
+        textView.layer.borderColor = UIColor(red: 0.22, green: 0.28, blue: 0.38, alpha: 1.0).cgColor
+        textView.textContainerInset = UIEdgeInsets(top: 12, left: 10, bottom: 12, right: 10)
         textView.delegate = self
         textView.returnKeyType = .done
         textView.autocorrectionType = .no
@@ -57,7 +61,7 @@ class J2METextBoxView: UIView, UITextViewDelegate {
         // Placeholder
         placeholderLabel.text = "Chạm vào đây để nhập nội dung..."
         placeholderLabel.font = .systemFont(ofSize: 18)
-        placeholderLabel.textColor = UIColor(white: 0.6, alpha: 1.0)
+        placeholderLabel.textColor = UIColor(white: 0.55, alpha: 1.0)
         placeholderLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(placeholderLabel)
 
@@ -69,11 +73,11 @@ class J2METextBoxView: UIView, UITextViewDelegate {
         tapGesture.cancelsTouchesInView = false
         addGestureRecognizer(tapGesture)
 
-        // Bottom Soft Button Bar matching Android Decade
+        // Bottom Soft Button Bar
         bottomButtonBar.axis = .horizontal
         bottomButtonBar.spacing = 8
         bottomButtonBar.distribution = .fillEqually
-        bottomButtonBar.backgroundColor = UIColor(red: 0.96, green: 0.96, blue: 0.98, alpha: 1.0)
+        bottomButtonBar.backgroundColor = UIColor(red: 0.09, green: 0.11, blue: 0.15, alpha: 0.95)
         bottomButtonBar.layoutMargins = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         bottomButtonBar.isLayoutMarginsRelativeArrangement = true
         bottomButtonBar.translatesAutoresizingMaskIntoConstraints = false
@@ -81,7 +85,7 @@ class J2METextBoxView: UIView, UITextViewDelegate {
 
         // Top border for bottom bar
         let separator = UIView()
-        separator.backgroundColor = UIColor(white: 0.85, alpha: 1.0)
+        separator.backgroundColor = UIColor(red: 0.20, green: 0.25, blue: 0.34, alpha: 1.0)
         separator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(separator)
 
@@ -91,8 +95,8 @@ class J2METextBoxView: UIView, UITextViewDelegate {
             textView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             textView.bottomAnchor.constraint(equalTo: separator.topAnchor, constant: -4),
 
-            placeholderLabel.topAnchor.constraint(equalTo: textView.topAnchor, constant: 8),
-            placeholderLabel.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 5),
+            placeholderLabel.topAnchor.constraint(equalTo: textView.topAnchor, constant: 12),
+            placeholderLabel.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 14),
 
             separator.leadingAnchor.constraint(equalTo: leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -109,18 +113,18 @@ class J2METextBoxView: UIView, UITextViewDelegate {
     /// Setup the keyboard accessory toolbar with the "V" (✓) close button
     private func setupKeyboardToolbar() {
         let toolbar = UIToolbar(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 44))
-        toolbar.barTintColor = UIColor(red: 0.95, green: 0.96, blue: 0.97, alpha: 1.0)
+        toolbar.barTintColor = UIColor(red: 0.12, green: 0.15, blue: 0.20, alpha: 1.0)
 
         // Clear / Xóa text button on left
         let clearBtn = UIBarButtonItem(title: "Xóa", style: .plain, target: self, action: #selector(clearText))
-        clearBtn.tintColor = .systemGray
+        clearBtn.tintColor = UIColor(red: 0.70, green: 0.75, blue: 0.82, alpha: 1.0)
 
         let flexSpace = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
 
         // The requested "nút V" / Done checkmark button:
-        // Displays "✓" (V) or "Xong" in prominent royal blue
+        // Displays "✓" (V) or "Xong" in prominent emerald green
         let doneBtn = UIBarButtonItem(title: "✓ Xong", style: .done, target: self, action: #selector(dismissKeyboard))
-        doneBtn.tintColor = UIColor(red: 0.12, green: 0.41, blue: 0.82, alpha: 1.0)
+        doneBtn.tintColor = UIColor(red: 0.06, green: 0.72, blue: 0.45, alpha: 1.0)
         doneBtn.setTitleTextAttributes([
             .font: UIFont.systemFont(ofSize: 18, weight: .bold)
         ], for: .normal)
@@ -172,6 +176,9 @@ class J2METextBoxView: UIView, UITextViewDelegate {
         let initial = String(cString: j2me_ui_get_textbox_text())
         textView.text = initial
         placeholderLabel.isHidden = !initial.isEmpty
+        let constraints = j2me_ui_get_form_item_param2(0)
+        textView.isEditable = (constraints & 0x20000) == 0
+        textView.isSecureTextEntry = (constraints & 0x10000) != 0
 
         // Build command buttons (CANCEL, OK, MENU)
         bottomButtonBar.arrangedSubviews.forEach { $0.removeFromSuperview() }
@@ -187,21 +194,21 @@ class J2METextBoxView: UIView, UITextViewDelegate {
             btn.titleLabel?.font = .systemFont(ofSize: 15, weight: .bold)
             btn.tag = Int(cmdId)
 
-            let isOk = cmdLabel.lowercased().contains("ok") || cmdLabel.lowercased().contains("chọn") || cmdLabel.lowercased().contains("select")
-            let isCancel = cmdLabel.lowercased().contains("cancel") || cmdLabel.lowercased().contains("hủy") || cmdLabel.lowercased().contains("thoát")
+            let isOk = cmdLabel.lowercased().contains("ok") || cmdLabel.lowercased().contains("chọn") || cmdLabel.lowercased().contains("select") || cmdLabel.lowercased().contains("xong")
+            let isCancel = cmdLabel.lowercased().contains("cancel") || cmdLabel.lowercased().contains("hủy") || cmdLabel.lowercased().contains("thoát") || cmdLabel.lowercased().contains("quay lại")
 
             if isOk {
-                btn.backgroundColor = UIColor(red: 0.12, green: 0.41, blue: 0.82, alpha: 1.0)
+                btn.backgroundColor = UIColor(red: 0.06, green: 0.72, blue: 0.45, alpha: 1.0) // Emerald Green
                 btn.setTitleColor(.white, for: .normal)
             } else if isCancel {
-                btn.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
-                btn.setTitleColor(.darkGray, for: .normal)
+                btn.backgroundColor = UIColor(red: 0.22, green: 0.27, blue: 0.35, alpha: 1.0) // Slate Gray
+                btn.setTitleColor(.white, for: .normal)
             } else {
-                btn.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
-                btn.setTitleColor(.darkGray, for: .normal)
+                btn.backgroundColor = UIColor(red: 0.18, green: 0.24, blue: 0.32, alpha: 1.0) // Dark Slate
+                btn.setTitleColor(.white, for: .normal)
             }
 
-            btn.layer.cornerRadius = 6
+            btn.layer.cornerRadius = 8
             btn.addTarget(self, action: #selector(commandTapped(_:)), for: .touchUpInside)
 
             bottomButtonBar.addArrangedSubview(btn)
@@ -210,7 +217,8 @@ class J2METextBoxView: UIView, UITextViewDelegate {
 
         // Auto focus textview if requested
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
-            self?.textView.becomeFirstResponder()
+            guard let self, !self.isHidden, self.window != nil, self.textView.isEditable else { return }
+            self.textView.becomeFirstResponder()
         }
     }
 
@@ -246,7 +254,7 @@ class FormView: UIView, UITextFieldDelegate {
 
     private func setup() {
         overrideUserInterfaceStyle = .light
-        backgroundColor = UIColor(red: 0.96, green: 0.97, blue: 0.98, alpha: 1.0)
+        backgroundColor = UIColor(red: 0.07, green: 0.09, blue: 0.12, alpha: 0.90) // Translucent dark overlay
 
         // Dismiss keyboard when tapping on background
         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
@@ -267,14 +275,14 @@ class FormView: UIView, UITextFieldDelegate {
         commandBar.axis = .horizontal
         commandBar.spacing = 10
         commandBar.distribution = .fillEqually
-        commandBar.backgroundColor = UIColor(red: 0.96, green: 0.96, blue: 0.98, alpha: 1.0)
+        commandBar.backgroundColor = UIColor(red: 0.09, green: 0.11, blue: 0.15, alpha: 0.95)
         commandBar.layoutMargins = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
         commandBar.isLayoutMarginsRelativeArrangement = true
         commandBar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(commandBar)
 
         let separator = UIView()
-        separator.backgroundColor = UIColor(white: 0.85, alpha: 1.0)
+        separator.backgroundColor = UIColor(red: 0.20, green: 0.25, blue: 0.34, alpha: 1.0)
         separator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(separator)
 
@@ -345,13 +353,10 @@ class FormView: UIView, UITextFieldDelegate {
             let rightBtn = makeRedButton(title: "QUAY LẠI", tag: 0)
             commandBar.addArrangedSubview(UIView()) // spacer
             commandBar.addArrangedSubview(rightBtn)
-        } else if commands.count <= 2 {
-            let leftBtn = makeRedButton(title: commands[0].label.uppercased(), tag: Int(commands[0].id))
-            commandBar.addArrangedSubview(leftBtn)
-            if commands.count == 2 {
-                commandBar.addArrangedSubview(UIView()) // spacer
-                let rightBtn = makeRedButton(title: commands[1].label.uppercased(), tag: Int(commands[1].id))
-                commandBar.addArrangedSubview(rightBtn)
+        } else if commands.count <= 3 {
+            for (index, cmd) in commands.enumerated() {
+                if index > 0 && commands.count == 2 { commandBar.addArrangedSubview(UIView()) }
+                commandBar.addArrangedSubview(makeRedButton(title: cmd.label.uppercased(), tag: Int(cmd.id)))
             }
         } else {
             // > 2 commands: Left is MENU, Right is Back/Exit command
@@ -372,8 +377,22 @@ class FormView: UIView, UITextFieldDelegate {
     private func makeRedButton(title: String, tag: Int) -> UIButton {
         let btn = UIButton(type: .system)
         btn.setTitle(title, for: .normal)
-        btn.titleLabel?.font = .systemFont(ofSize: 16, weight: .bold)
-        btn.setTitleColor(UIColor(red: 0.90, green: 0.22, blue: 0.21, alpha: 1.0), for: .normal)
+        btn.titleLabel?.font = .systemFont(ofSize: 15, weight: .bold)
+        btn.layer.cornerRadius = 8
+        let lower = title.lowercased()
+        if lower.contains("ok") || lower.contains("chọn") || lower.contains("xong") || lower.contains("tiếp") || lower.contains("lưu") {
+            btn.backgroundColor = UIColor(red: 0.06, green: 0.72, blue: 0.45, alpha: 1.0) // Emerald Green #10B981
+            btn.setTitleColor(.white, for: .normal)
+        } else if lower.contains("hủy") || lower.contains("thoát") || lower.contains("quay lại") || lower.contains("back") {
+            btn.backgroundColor = UIColor(red: 0.22, green: 0.27, blue: 0.35, alpha: 1.0) // Slate Gray #374151
+            btn.setTitleColor(.white, for: .normal)
+        } else if lower.contains("menu") {
+            btn.backgroundColor = UIColor(red: 0.31, green: 0.27, blue: 0.90, alpha: 1.0) // Indigo #4F46E5
+            btn.setTitleColor(.white, for: .normal)
+        } else {
+            btn.backgroundColor = UIColor(red: 0.18, green: 0.24, blue: 0.32, alpha: 1.0)
+            btn.setTitleColor(.white, for: .normal)
+        }
         btn.tag = tag
         if tag >= 0 {
             btn.addTarget(self, action: #selector(commandTapped(_:)), for: .touchUpInside)
@@ -403,10 +422,10 @@ class FormView: UIView, UITextFieldDelegate {
 
     private func addStringItem(label: String, text: String) {
         let card = UIView()
-        card.backgroundColor = .white
-        card.layer.cornerRadius = 10
+        card.backgroundColor = UIColor(red: 0.12, green: 0.15, blue: 0.20, alpha: 0.95)
+        card.layer.cornerRadius = 12
         card.layer.borderWidth = 1
-        card.layer.borderColor = UIColor(white: 0.88, alpha: 1.0).cgColor
+        card.layer.borderColor = UIColor(red: 0.22, green: 0.28, blue: 0.38, alpha: 1.0).cgColor
         card.translatesAutoresizingMaskIntoConstraints = false
 
         let container = UIStackView()
@@ -421,7 +440,7 @@ class FormView: UIView, UITextFieldDelegate {
             let labelView = UILabel()
             labelView.text = label
             labelView.font = .boldSystemFont(ofSize: 14)
-            labelView.textColor = UIColor(red: 0.12, green: 0.45, blue: 0.90, alpha: 1.0)
+            labelView.textColor = UIColor(red: 0.38, green: 0.76, blue: 1.0, alpha: 1.0)
             container.addArrangedSubview(labelView)
         }
 
@@ -429,7 +448,7 @@ class FormView: UIView, UITextFieldDelegate {
             let textView = UILabel()
             textView.text = text
             textView.font = .systemFont(ofSize: 15)
-            textView.textColor = UIColor(red: 0.15, green: 0.15, blue: 0.18, alpha: 1.0)
+            textView.textColor = UIColor(red: 0.92, green: 0.94, blue: 0.96, alpha: 1.0)
             textView.numberOfLines = 0
             container.addArrangedSubview(textView)
         }
@@ -446,10 +465,10 @@ class FormView: UIView, UITextFieldDelegate {
 
     private func addTextField(label: String, text: String, index: Int) {
         let card = UIView()
-        card.backgroundColor = .white
-        card.layer.cornerRadius = 10
+        card.backgroundColor = UIColor(red: 0.12, green: 0.15, blue: 0.20, alpha: 0.95)
+        card.layer.cornerRadius = 12
         card.layer.borderWidth = 1
-        card.layer.borderColor = UIColor(white: 0.88, alpha: 1.0).cgColor
+        card.layer.borderColor = UIColor(red: 0.22, green: 0.28, blue: 0.38, alpha: 1.0).cgColor
         card.translatesAutoresizingMaskIntoConstraints = false
 
         let container = UIStackView()
@@ -464,20 +483,34 @@ class FormView: UIView, UITextFieldDelegate {
             let labelView = UILabel()
             labelView.text = label
             labelView.font = .boldSystemFont(ofSize: 14)
-            labelView.textColor = UIColor(red: 0.12, green: 0.15, blue: 0.20, alpha: 1.0)
+            labelView.textColor = UIColor(red: 0.38, green: 0.76, blue: 1.0, alpha: 1.0)
             container.addArrangedSubview(labelView)
         }
 
         let tf = UITextField()
         tf.tag = index
         tf.text = text
+        tf.placeholder = "Nhập chữ"
+        let constraints = j2me_ui_get_form_item_param2(Int32(index))
+        tf.isEnabled = (constraints & 0x20000) == 0
+        tf.isSecureTextEntry = (constraints & 0x10000) != 0
+        tf.autocorrectionType = .no
+        tf.autocapitalizationType = .none
+        switch constraints & 0xFFFF {
+        case 1: tf.keyboardType = .emailAddress
+        case 2: tf.keyboardType = .numbersAndPunctuation
+        case 3: tf.keyboardType = .phonePad
+        case 4: tf.keyboardType = .URL
+        case 5: tf.keyboardType = .decimalPad
+        default: break
+        }
         tf.borderStyle = .none
         tf.font = .systemFont(ofSize: 16)
-        tf.textColor = .black
-        tf.backgroundColor = UIColor(white: 0.96, alpha: 1.0)
+        tf.textColor = .white
+        tf.backgroundColor = UIColor(red: 0.08, green: 0.10, blue: 0.14, alpha: 1.0)
         tf.layer.cornerRadius = 8
         tf.layer.borderWidth = 1
-        tf.layer.borderColor = UIColor(white: 0.85, alpha: 1.0).cgColor
+        tf.layer.borderColor = UIColor(red: 0.24, green: 0.30, blue: 0.40, alpha: 1.0).cgColor
         tf.returnKeyType = .done
         tf.delegate = self
         tf.translatesAutoresizingMaskIntoConstraints = false
@@ -488,9 +521,10 @@ class FormView: UIView, UITextFieldDelegate {
         tf.leftViewMode = .always
 
         let toolbar = UIToolbar(frame: CGRect(x: 0, y: 0, width: UIScreen.main.bounds.width, height: 44))
+        toolbar.barTintColor = UIColor(red: 0.12, green: 0.15, blue: 0.20, alpha: 1.0)
         let flex = UIBarButtonItem(barButtonSystemItem: .flexibleSpace, target: nil, action: nil)
         let doneBtn = UIBarButtonItem(title: "✓ Xong", style: .done, target: self, action: #selector(dismissKeyboard))
-        doneBtn.tintColor = UIColor(red: 0.12, green: 0.41, blue: 0.82, alpha: 1.0)
+        doneBtn.tintColor = UIColor(red: 0.06, green: 0.72, blue: 0.45, alpha: 1.0)
         doneBtn.setTitleTextAttributes([.font: UIFont.systemFont(ofSize: 18, weight: .bold)], for: .normal)
         toolbar.items = [flex, doneBtn]
         tf.inputAccessoryView = toolbar
@@ -511,10 +545,10 @@ class FormView: UIView, UITextFieldDelegate {
 
     private func addChoiceGroup(label: String, text: String, index: Int) {
         let card = UIView()
-        card.backgroundColor = .white
-        card.layer.cornerRadius = 10
+        card.backgroundColor = UIColor(red: 0.12, green: 0.15, blue: 0.20, alpha: 0.95)
+        card.layer.cornerRadius = 12
         card.layer.borderWidth = 1
-        card.layer.borderColor = UIColor(white: 0.88, alpha: 1.0).cgColor
+        card.layer.borderColor = UIColor(red: 0.22, green: 0.28, blue: 0.38, alpha: 1.0).cgColor
         card.translatesAutoresizingMaskIntoConstraints = false
 
         let container = UIStackView()
@@ -529,7 +563,7 @@ class FormView: UIView, UITextFieldDelegate {
             let labelView = UILabel()
             labelView.text = label
             labelView.font = .boldSystemFont(ofSize: 15)
-            labelView.textColor = UIColor(red: 0.12, green: 0.15, blue: 0.20, alpha: 1.0)
+            labelView.textColor = UIColor(red: 0.38, green: 0.76, blue: 1.0, alpha: 1.0)
             labelView.numberOfLines = 0
             container.addArrangedSubview(labelView)
         }
@@ -537,7 +571,7 @@ class FormView: UIView, UITextFieldDelegate {
         // Parse format: "selectedIndex\nopt1\topt2\nsel0,sel1"
         let parts = text.components(separatedBy: "\n")
         let selectedIdx = Int(parts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "") ?? 0
-        let options = parts.count > 1 ? parts[1].components(separatedBy: "\t").filter { !$0.isEmpty } : []
+        let options = parts.count > 1 && !parts[1].isEmpty ? parts[1].components(separatedBy: "\t") : []
         var flags: [Bool] = []
         if parts.count > 2 {
             flags = parts[2].components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) == "1" }
@@ -570,7 +604,7 @@ class FormView: UIView, UITextFieldDelegate {
             let optLabel = UILabel()
             optLabel.text = optTitle
             optLabel.font = .systemFont(ofSize: 16, weight: isSelected ? .medium : .regular)
-            optLabel.textColor = isSelected ? UIColor(red: 0.10, green: 0.10, blue: 0.12, alpha: 1.0) : UIColor(red: 0.25, green: 0.25, blue: 0.28, alpha: 1.0)
+            optLabel.textColor = isSelected ? .white : UIColor(red: 0.75, green: 0.80, blue: 0.88, alpha: 1.0)
             optLabel.numberOfLines = 0
             rowStack.addArrangedSubview(optLabel)
 
@@ -606,9 +640,9 @@ class FormView: UIView, UITextFieldDelegate {
 
         if isMultiple {
             // Checkbox: rounded rectangle
-            v.layer.cornerRadius = 5
+            v.layer.cornerRadius = 6
             if isSelected {
-                v.backgroundColor = UIColor(red: 0.85, green: 0.20, blue: 0.20, alpha: 1.0)
+                v.backgroundColor = UIColor(red: 0.06, green: 0.72, blue: 0.45, alpha: 1.0)
                 v.layer.borderWidth = 0
                 let check = UILabel()
                 check.text = "✓"
@@ -622,31 +656,31 @@ class FormView: UIView, UITextFieldDelegate {
                     check.centerYAnchor.constraint(equalTo: v.centerYAnchor)
                 ])
             } else {
-                v.backgroundColor = .white
+                v.backgroundColor = UIColor(red: 0.10, green: 0.12, blue: 0.16, alpha: 1.0)
                 v.layer.borderWidth = 1.8
-                v.layer.borderColor = UIColor(white: 0.65, alpha: 1.0).cgColor
+                v.layer.borderColor = UIColor(red: 0.30, green: 0.38, blue: 0.50, alpha: 1.0).cgColor
             }
         } else {
             // Radio button: circular ring with inner dot
             v.layer.cornerRadius = size / 2
-            v.backgroundColor = .white
+            v.backgroundColor = UIColor(red: 0.10, green: 0.12, blue: 0.16, alpha: 1.0)
             if isSelected {
                 v.layer.borderWidth = 2.2
-                v.layer.borderColor = UIColor(red: 0.15, green: 0.15, blue: 0.18, alpha: 1.0).cgColor
+                v.layer.borderColor = UIColor(red: 0.06, green: 0.72, blue: 0.45, alpha: 1.0).cgColor
                 let dot = UIView()
-                dot.backgroundColor = UIColor(red: 0.15, green: 0.15, blue: 0.18, alpha: 1.0)
-                dot.layer.cornerRadius = 6
+                dot.backgroundColor = UIColor(red: 0.06, green: 0.72, blue: 0.45, alpha: 1.0)
+                dot.layer.cornerRadius = 5
                 dot.translatesAutoresizingMaskIntoConstraints = false
                 v.addSubview(dot)
                 NSLayoutConstraint.activate([
                     dot.centerXAnchor.constraint(equalTo: v.centerXAnchor),
                     dot.centerYAnchor.constraint(equalTo: v.centerYAnchor),
-                    dot.widthAnchor.constraint(equalToConstant: 12),
-                    dot.heightAnchor.constraint(equalToConstant: 12),
+                    dot.widthAnchor.constraint(equalToConstant: 10),
+                    dot.heightAnchor.constraint(equalToConstant: 10),
                 ])
             } else {
                 v.layer.borderWidth = 1.8
-                v.layer.borderColor = UIColor(white: 0.65, alpha: 1.0).cgColor
+                v.layer.borderColor = UIColor(red: 0.30, green: 0.38, blue: 0.50, alpha: 1.0).cgColor
             }
         }
         return v
@@ -718,6 +752,7 @@ class FormView: UIView, UITextFieldDelegate {
                 updateRowIndicator(tag: rowTag, isSelected: (i == optIndex))
             }
         }
+        j2me_input_post_key(Int32(J2ME_UI_FORM_CHANGED), Int32(itemIndex))
     }
 
     func textFieldDidEndEditing(_ textField: UITextField) {
@@ -782,32 +817,32 @@ class J2MEListView: UIView, UITableViewDataSource, UITableViewDelegate {
 
     private func setup() {
         overrideUserInterfaceStyle = .light
-        backgroundColor = UIColor(red: 0.96, green: 0.97, blue: 0.98, alpha: 1.0)
+        backgroundColor = UIColor(red: 0.07, green: 0.09, blue: 0.12, alpha: 0.90) // Translucent dark overlay
 
         tableView.dataSource = self
         tableView.delegate = self
-        tableView.backgroundColor = .white
-        tableView.separatorColor = UIColor(white: 0.88, alpha: 1.0)
+        tableView.backgroundColor = UIColor(red: 0.12, green: 0.15, blue: 0.20, alpha: 0.95)
+        tableView.separatorColor = UIColor(red: 0.20, green: 0.25, blue: 0.34, alpha: 1.0)
         tableView.separatorInset = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 16)
         tableView.translatesAutoresizingMaskIntoConstraints = false
 
-        // Long press on list item opens context menu matching Android Decade (Screenshot 2)
+        // Long press on list item opens context menu
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleTableLongPress(_:)))
         tableView.addGestureRecognizer(longPress)
         addSubview(tableView)
 
-        // Bottom Softkeys: Red MENU and Red THOÁT matching Screenshot 1 & 2
+        // Bottom Softkeys
         bottomButtonBar.axis = .horizontal
         bottomButtonBar.distribution = .equalSpacing
         bottomButtonBar.alignment = .center
-        bottomButtonBar.backgroundColor = .white
+        bottomButtonBar.backgroundColor = UIColor(red: 0.09, green: 0.11, blue: 0.15, alpha: 0.95)
         bottomButtonBar.layoutMargins = UIEdgeInsets(top: 8, left: 20, bottom: 8, right: 20)
         bottomButtonBar.isLayoutMarginsRelativeArrangement = true
         bottomButtonBar.translatesAutoresizingMaskIntoConstraints = false
         addSubview(bottomButtonBar)
 
         let separator = UIView()
-        separator.backgroundColor = UIColor(white: 0.88, alpha: 1.0)
+        separator.backgroundColor = UIColor(red: 0.20, green: 0.25, blue: 0.34, alpha: 1.0)
         separator.translatesAutoresizingMaskIntoConstraints = false
         addSubview(separator)
 
@@ -882,8 +917,23 @@ class J2MEListView: UIView, UITableViewDataSource, UITableViewDelegate {
     private func makeRedButton(title: String, tag: Int) -> UIButton {
         let btn = UIButton(type: .system)
         btn.setTitle(title, for: .normal)
-        btn.titleLabel?.font = .systemFont(ofSize: 16, weight: .bold)
-        btn.setTitleColor(UIColor(red: 0.90, green: 0.22, blue: 0.21, alpha: 1.0), for: .normal) // Red #E53935
+        btn.titleLabel?.font = .systemFont(ofSize: 15, weight: .bold)
+        btn.layer.cornerRadius = 8
+        let lower = title.lowercased()
+        if lower.contains("ok") || lower.contains("chọn") || lower.contains("chạy") {
+            btn.backgroundColor = UIColor(red: 0.06, green: 0.72, blue: 0.45, alpha: 1.0) // Emerald Green #10B981
+            btn.setTitleColor(.white, for: .normal)
+        } else if lower.contains("thoát") || lower.contains("hủy") || lower.contains("back") || lower.contains("quay lại") {
+            btn.backgroundColor = UIColor(red: 0.22, green: 0.27, blue: 0.35, alpha: 1.0) // Slate Gray #374151
+            btn.setTitleColor(.white, for: .normal)
+        } else if lower.contains("menu") {
+            btn.backgroundColor = UIColor(red: 0.31, green: 0.27, blue: 0.90, alpha: 1.0) // Indigo #4F46E5
+            btn.setTitleColor(.white, for: .normal)
+        } else {
+            btn.backgroundColor = UIColor(red: 0.18, green: 0.24, blue: 0.32, alpha: 1.0)
+            btn.setTitleColor(.white, for: .normal)
+        }
+        btn.contentEdgeInsets = UIEdgeInsets(top: 6, left: 16, bottom: 6, right: 16)
         btn.tag = tag
         if tag >= 0 {
             btn.addTarget(self, action: #selector(commandTapped(_:)), for: .touchUpInside)
@@ -948,19 +998,19 @@ class J2MEListView: UIView, UITableViewDataSource, UITableViewDelegate {
                    UITableViewCell(style: .default, reuseIdentifier: "DecadeListCell")
 
         let isSelected = indexPath.row == selectedRow
-        cell.backgroundColor = isSelected ? UIColor(red: 0.80, green: 0.84, blue: 0.98, alpha: 1.0) : .white
+        cell.backgroundColor = isSelected ? UIColor(red: 0.18, green: 0.24, blue: 0.34, alpha: 1.0) : UIColor(red: 0.12, green: 0.15, blue: 0.20, alpha: 1.0)
 
         var config = cell.defaultContentConfiguration()
         let item = items[indexPath.row]
         if item.isRunning {
             config.image = UIImage(systemName: "play.fill")
-            config.imageProperties.tintColor = UIColor(red: 0.30, green: 0.69, blue: 0.31, alpha: 1.0)
+            config.imageProperties.tintColor = UIColor(red: 0.06, green: 0.72, blue: 0.45, alpha: 1.0)
         } else {
             config.image = nil
         }
         config.text = item.title
         config.textProperties.font = .systemFont(ofSize: 16, weight: .medium)
-        config.textProperties.color = .black
+        config.textProperties.color = .white
 
         cell.contentConfiguration = config
         cell.selectionStyle = .none

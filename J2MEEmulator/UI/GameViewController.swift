@@ -275,7 +275,8 @@ class GameViewController: UIViewController {
         }
 
         // Apply saved configuration: Aspect ratio & Forced Fullscreen
-        let isForceFill = isForceFullscreenEnabled || !isAspectFitEnabled
+        let isForceFullscreen = isForceFullscreenEnabled
+        let isForceFill = isForceFullscreen || !isAspectFitEnabled
         emulatorView.isAspectFit = !isForceFill
 
         if isForceFullscreen || isKeypadHidden {
@@ -1154,7 +1155,8 @@ class GameViewController: UIViewController {
         let savedH = UserDefaults.standard.object(forKey: "resH_\(currentGameId)") as? Int ?? 0
         let targetSize = (savedW > 0 && savedH > 0) ? (savedW, savedH) : calculateAutoCanvasSize()
 
-        let isForceFill = isForceFullscreenEnabled || !isAspectFitEnabled
+        let isForceFullscreen = isForceFullscreenEnabled
+        let isForceFill = isForceFullscreen || !isAspectFitEnabled
         emulatorView.isAspectFit = !isForceFill
 
         let savedLayout = (UserDefaults.standard.object(forKey: "keypad_layout_\(currentGameId)") as? Int) ??

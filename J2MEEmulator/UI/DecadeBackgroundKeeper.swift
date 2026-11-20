@@ -626,28 +626,13 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     }
 
     private func setupRemoteCommandsIfNeeded() {
-        guard !remoteCommandsConfigured else { return }
-        remoteCommandsConfigured = true
-        UIApplication.shared.beginReceivingRemoteControlEvents()
-
+        // TẮT HOÀN TOÀN MPRemoteCommandCenter:
+        // Không nhận sự kiện điều khiển nhạc để KHÔNG hiện lên Dynamic Island trên iPhone 14 Pro/15/16
+        // và KHÔNG tranh chấp quyền phát media khi người dùng xem video YouTube/TikTok/Facebook.
+        UIApplication.shared.endReceivingRemoteControlEvents()
         let center = MPRemoteCommandCenter.shared()
-        center.playCommand.isEnabled = true
-        center.playCommand.addTarget { [weak self] _ in
-            guard let self = self else { return .commandFailed }
-            self.startAudioPipeline(forceRecreate: false)
-            self.updateNowPlayingInfo()
-            return .success
-        }
-        center.pauseCommand.isEnabled = true
-        center.pauseCommand.addTarget { [weak self] _ in
-            // Giữ kết nối luôn sống ngay cả khi bấm nhầm nút trên màn hình khóa
-            guard let self = self else { return .commandFailed }
-            if self.isTreoActive {
-                self.startAudioPipeline(forceRecreate: false)
-                self.updateNowPlayingInfo()
-            }
-            return .success
-        }
+        center.playCommand.isEnabled = false
+        center.pauseCommand.isEnabled = false
         center.nextTrackCommand.isEnabled = false
         center.previousTrackCommand.isEnabled = false
     }
@@ -792,45 +777,13 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     private var lastCardImageRenderTime: TimeInterval = 0
 
     func updateNowPlayingInfo() {
-        let ramMB = Double(jvm_bridge_get_used_ram_kb()) / 1024.0
-        let cpu = jvm_bridge_get_cpu_usage_percent()
-        let tabs = GameViewController.activeTabCount
-
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "vi_VN")
-        formatter.dateFormat = "HH:mm:ss"
-        let timeString = formatter.string(from: Date())
-
-        let now = Date().timeIntervalSince1970
-        let cardImage: UIImage
-        if let cached = cachedCardImage, (now - lastCardImageRenderTime) < 60.0 {
-            cardImage = cached
-        } else {
-            cardImage = generateNotificationCardImage(ramMB: ramMB, cpuPercent: cpu, tabCount: tabs, timeString: timeString)
-            cachedCardImage = cardImage
-            lastCardImageRenderTime = now
-        }
-
-        let netStatus = DecadeNetworkKeeper.shared.isNetworkConnected ? "Mạng 24/24: OK" : "Mất mạng"
-        let albumTitle = "Treo 24/24 Bất Tử • \(netStatus) • \(timeString)"
-
-        var info: [String: Any] = [
-            MPMediaItemPropertyTitle: "🎮 \(currentGameName)",
-            MPMediaItemPropertyArtist: "RAM: \(Int(ramMB)) MB   •   CPU: \(Int(cpu))%   •   Tab: \(tabs)",
-            MPMediaItemPropertyAlbumTitle: albumTitle,
-            MPNowPlayingInfoPropertyIsLiveStream: true,
-            MPNowPlayingInfoPropertyPlaybackRate: 1.0,
-            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0
-        ]
-        let artwork = MPMediaItemArtwork(boundsSize: cardImage.size) { _ in cardImage }
-        info[MPMediaItemPropertyArtwork] = artwork
-
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+        // TẮT HOÀN TOÀN DYNAMIC ISLAND VÀ NOW PLAYING:
+        // Đặt nil để KHÔNG hiển thị lên Dynamic Island của iPhone 14 Pro / 15 / 16,
+        // và KHÔNG chiếm quyền âm thanh gây mất tiếng khi người dùng xem video YouTube/TikTok/Facebook.
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         if #available(iOS 13.0, *) {
-            MPNowPlayingInfoCenter.default().playbackState = .playing
+            MPNowPlayingInfoCenter.default().playbackState = .stopped
         }
-        // Thẻ trạng thái RAM/CPU/Tab được ghim cố định qua MPNowPlayingInfoCenter trên màn hình khóa.
-        // Tuyệt đối không dùng UNUserNotificationCenter ở đây để không làm nhảy banner thông báo liên tục!
     }
 
     /// Khởi động pipeline âm thanh kép giữ tiến trình sống 24/7 xuyên suốt không ngắt nghỉ:
@@ -853,17 +806,8 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                 audioPlayer = nil
             }
 
-            // 1. Luôn kích hoạt AVAudioPlayer chạy nền liên tục (vòng lặp vô tận -1)
+            // Luôn kích hoạt AVAudioPlayer chạy nền liên tục silent.wav (volume 0.0)
             startFallbackAudioPlayer()
-
-            // 2. Kích hoạt song song AVAudioEngine hạ âm chỉ khi AVAudioPlayer chưa chạy được
-            if audioPlayer?.isPlaying != true {
-                if audioEngine == nil {
-                    _ = startRealtimeAudioEngine()
-                } else if let eng = audioEngine, !eng.isRunning {
-                    try? eng.start()
-                }
-            }
         } catch {
             print("[DecadeBackgroundKeeper] Audio pipeline error: \(error) — ensuring fallback player runs")
             startFallbackAudioPlayer()
@@ -871,54 +815,8 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     }
 
     private func startRealtimeAudioEngine() -> Bool {
-        let engine = AVAudioEngine()
-        let outputFormat = engine.outputNode.outputFormat(forBus: 0)
-        let sampleRate = outputFormat.sampleRate > 0 ? outputFormat.sampleRate : 44100.0
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
-            return false
-        }
-
-        // Continuous 18 Hz sub-audible sine wave at amplitude 0.0015 (-56 dB):
-        // Completely inaudible to human ears & iPhone speakers, yet continuous non-zero PCM
-        // so mediaserverd AURemoteIO hardware pipeline NEVER drops our background assertion!
-        var phase: Double = 0.0
-        let phaseIncrement = 2.0 * Double.pi * 18.0 / sampleRate
-        let amplitude: Float = 0.0015
-
-        let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
-            let ablPointer = UnsafeMutableAudioBufferListPointer(audioBufferList)
-            for frame in 0..<Int(frameCount) {
-                let sample = Float(sin(phase)) * amplitude
-                phase += phaseIncrement
-                if phase >= 2.0 * Double.pi {
-                    phase -= 2.0 * Double.pi
-                }
-                for buffer in ablPointer {
-                    if let mData = buffer.mData {
-                        let ptr = mData.assumingMemoryBound(to: Float.self)
-                        ptr[frame] = sample
-                    }
-                }
-            }
-            return noErr
-        }
-
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-        engine.mainMixerNode.outputVolume = 1.0
-        engine.prepare()
-
-        do {
-            try engine.start()
-            self.audioEngine = engine
-            self.sourceNode = node
-            print("[DecadeBackgroundKeeper] AVAudioEngine AURemoteIO 18Hz keepalive RUNNING (\(sampleRate) Hz).")
-            return true
-        } catch {
-            print("[DecadeBackgroundKeeper] AVAudioEngine start failed: \(error)")
-            engine.stop()
-            return false
-        }
+        // Vô hiệu hóa AVAudioEngine phần cứng để tránh chiếm buffer âm thanh của YouTube/TikTok
+        return false
     }
 
     private func startFallbackAudioPlayer() {
@@ -928,7 +826,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             try? session.setActive(true, options: [])
 
             if audioPlayer == nil {
-                // Ưu tiên nạp file silent.wav trong App Bundle
+                // Nạp file silent.wav trong App Bundle
                 var player: AVAudioPlayer? = nil
                 if let bundleURL = Bundle.main.url(forResource: "silent", withExtension: "wav") {
                     player = try? AVAudioPlayer(contentsOf: bundleURL)
@@ -939,12 +837,12 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                 audioPlayer = player
                 audioPlayer?.delegate = self
                 audioPlayer?.numberOfLoops = -1
-                audioPlayer?.volume = 0.05
+                audioPlayer?.volume = 0.0 // Âm lượng 0.0: Tuyệt đối im lặng, không làm mất âm thanh khi xem video YouTube/TikTok
                 audioPlayer?.prepareToPlay()
             }
             if audioPlayer?.isPlaying == false {
                 let ok = audioPlayer?.play() ?? false
-                print("[DecadeBackgroundKeeper] Continuous AVAudioPlayer play=\(ok)")
+                print("[DecadeBackgroundKeeper] Silent AVAudioPlayer keepalive play=\(ok)")
             }
         }
     }

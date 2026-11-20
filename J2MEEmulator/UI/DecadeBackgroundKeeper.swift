@@ -244,6 +244,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     private var currentGameName: String = "J2ME Game"
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
     private let audioQueue = DispatchQueue(label: "com.decade.keepalive.audio", qos: .userInteractive)
+    private var isAudioInterruptedByOtherApp: Bool = false
 
     private func beginAppBackgroundTask() {
         guard bgTaskID == .invalid else { return }
@@ -439,10 +440,11 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         // 0. Cấp quyền chạy nền vô thời hạn trên iOS (BKSProcessAssertion / TrollStore / Enterprise)
         decade_acquire_unlimited_background_assertion()
 
-        // 1. Luôn kích hoạt Audio Pipeline bất tử (AVAudioPlayer loop) trên hàng đợi nền
-        // để mediaserverd cấp assertion chạy nền 24/24 không bao giờ bị iOS đóng băng (freeze)
-        audioQueue.async { [weak self] in
-            self?.startAudioPipeline(forceRecreate: false)
+        // 1. Kích hoạt Audio Pipeline chỉ khi KHÔNG có app khác đang phát âm thanh (YouTube, TikTok...)
+        if !AVAudioSession.sharedInstance().isOtherAudioPlaying {
+            audioQueue.async { [weak self] in
+                self?.startAudioPipeline(forceRecreate: false)
+            }
         }
 
         // 2. Kích hoạt song song Định vị BTS nếu bật
@@ -505,8 +507,10 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     @objc func onSceneWillResignActive() {
         if isTreoActive {
             decade_acquire_unlimited_background_assertion()
-            audioQueue.async { [weak self] in
-                self?.startAudioPipeline(forceRecreate: false)
+            if !AVAudioSession.sharedInstance().isOtherAudioPlaying {
+                audioQueue.async { [weak self] in
+                    self?.startAudioPipeline(forceRecreate: false)
+                }
             }
             if DecadeLocationKeeper.shared.isLocationModeActive {
                 DecadeLocationKeeper.shared.start()
@@ -569,14 +573,22 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
               let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
 
         if type == .began {
+            // App khác (YouTube, TikTok, Cuộc gọi...) bắt đầu phát âm thanh
+            isAudioInterruptedByOtherApp = true
             beginAppBackgroundTask()
-        } else if type == .ended {
             audioQueue.async { [weak self] in
-                guard let self = self, self.isTreoActive else { return }
-                self.startAudioPipeline(forceRecreate: true)
-                self.endAppBackgroundTask()
-                DispatchQueue.main.async {
-                    self.updateNowPlayingInfo()
+                self?.audioPlayer?.pause()
+            }
+            print("[DecadeBackgroundKeeper] Audio interrupted by other app — yielded audio completely to preserve video playback.")
+        } else if type == .ended {
+            // Khi app khác dừng phát hoàn toàn
+            isAudioInterruptedByOtherApp = false
+            endAppBackgroundTask()
+            // Đợi 2 giây và chỉ khởi động lại nếu không có app nào khác đang phát âm thanh
+            audioQueue.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+                guard let self = self, self.isTreoActive, !self.isAudioInterruptedByOtherApp else { return }
+                if !AVAudioSession.sharedInstance().isOtherAudioPlaying {
+                    self.startFallbackAudioPlayer()
                 }
             }
         }
@@ -586,6 +598,9 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         guard isTreoActive else { return }
         audioQueue.async { [weak self] in
             guard let self = self, self.isTreoActive else { return }
+            if self.isAudioInterruptedByOtherApp || AVAudioSession.sharedInstance().isOtherAudioPlaying {
+                return
+            }
             if self.audioPlayer?.isPlaying != true {
                 self.startFallbackAudioPlayer()
             }
@@ -791,10 +806,12 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     /// 2. AVAudioEngine + AVAudioSourceNode hạ âm 18 Hz (-56 dB) phần cứng CoreAudio.
     /// Kết hợp đồng thời đảm bảo iOS RunningBoard không bao giờ kill tiến trình hay ngắt kết nối socket!
     private func startAudioPipeline(forceRecreate: Bool) {
+        if isAudioInterruptedByOtherApp || AVAudioSession.sharedInstance().isOtherAudioPlaying {
+            print("[DecadeBackgroundKeeper] Other media is playing (YouTube/TikTok) — startAudioPipeline skipped.")
+            return
+        }
         do {
             let session = AVAudioSession.sharedInstance()
-            // .playback kết hợp .mixWithOthers + Bluetooth + AirPlay để vừa giữ keepalive 24/7,
-            // vừa không bị gián đoạn khi người dùng nghe Spotify/YouTube hay đổi tai nghe AirPods
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP, .allowAirPlay])
             try session.setActive(true, options: [])
 
@@ -820,6 +837,14 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     }
 
     private func startFallbackAudioPlayer() {
+        // KIỂM TRA CHẶN XUNG ĐỘT ÂM THANH:
+        // Nếu người dùng đang xem video YouTube/TikTok/Facebook hoặc app khác đang phát âm thanh,
+        // TUYỆT ĐỐI KHÔNG gọi setActive(true) hay play() để không làm ngắt tiếng video của người dùng!
+        if isAudioInterruptedByOtherApp || AVAudioSession.sharedInstance().isOtherAudioPlaying {
+            print("[DecadeBackgroundKeeper] Other media is playing — skipping audio session activation to preserve video sound.")
+            return
+        }
+
         do {
             let session = AVAudioSession.sharedInstance()
             try? session.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP, .allowAirPlay])
@@ -851,7 +876,11 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         if isTreoActive {
             audioQueue.async { [weak self] in
-                self?.audioPlayer?.play()
+                guard let self = self, self.isTreoActive else { return }
+                if self.isAudioInterruptedByOtherApp || AVAudioSession.sharedInstance().isOtherAudioPlaying {
+                    return
+                }
+                self.audioPlayer?.play()
             }
         }
     }
@@ -859,7 +888,11 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         if isTreoActive {
             audioQueue.async { [weak self] in
-                self?.startAudioPipeline(forceRecreate: true)
+                guard let self = self, self.isTreoActive else { return }
+                if self.isAudioInterruptedByOtherApp || AVAudioSession.sharedInstance().isOtherAudioPlaying {
+                    return
+                }
+                self.startAudioPipeline(forceRecreate: true)
             }
         }
     }
@@ -875,11 +908,16 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             // 0. Duy trì quyền chạy nền vô thời hạn trên iOS
             decade_acquire_unlimited_background_assertion()
 
-            // 1. Luôn bảo đảm Audio Pipeline (AVAudioPlayer loop) đang phát
+            // 1. Bảo đảm Audio Pipeline (CHỈ chạy khi người dùng KHÔNG xem video / KHÔNG nghe app khác)
             self.audioQueue.async { [weak self] in
                 guard let self = self, self.isTreoActive else { return }
+                // Nếu người dùng đang xem video (YouTube, TikTok...) hoặc bị gián đoạn âm thanh:
+                // TUYỆT ĐỐI KHÔNG ép phát audio và KHÔNG gọi setActive(true)!
+                if self.isAudioInterruptedByOtherApp || AVAudioSession.sharedInstance().isOtherAudioPlaying {
+                    return
+                }
                 if self.audioPlayer?.isPlaying != true {
-                    print("[DecadeBackgroundKeeper] Watchdog: AudioPlayer not playing, resuming...")
+                    print("[DecadeBackgroundKeeper] Watchdog: AudioPlayer not playing and no other audio, resuming...")
                     self.startFallbackAudioPlayer()
                 }
             }

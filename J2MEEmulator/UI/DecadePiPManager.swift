@@ -48,7 +48,6 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
 
     override init() {
         super.init()
-        setupAudioSession()
     }
 
     func setupAudioSession() {

@@ -920,6 +920,8 @@ class GameViewController: UIViewController {
             keypad.isHidden = hidden
             floatingShowKeypadBtn.isHidden = isForceFullscreenEnabled || !isKeypadHidden
             keypadHeightConstraint?.constant = hidden ? 0 : keypadCurrentHeight
+            keypad.loadHiddenKeys()
+            keypad.updateKeysVisibility()
         }
 
         j2me_ui_restore_focused_screen()
@@ -939,8 +941,6 @@ class GameViewController: UIViewController {
             }
         }
 
-        keypad.loadHiddenKeys()
-        keypad.updateKeysVisibility()
         updateTabStripVisibility()
         updateSplitFocusBorders()
 

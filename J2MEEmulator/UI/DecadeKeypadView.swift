@@ -79,6 +79,21 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
+    func loadHiddenKeys() {
+        let key = "decade_hidden_keys_\(gameId)"
+        if let saved = UserDefaults.standard.stringArray(forKey: key) {
+            hiddenKeys = Set(saved)
+        } else {
+            hiddenKeys = []
+        }
+    }
+
+    func saveHiddenKeys() {
+        let key = "decade_hidden_keys_\(gameId)"
+        UserDefaults.standard.set(Array(hiddenKeys), forKey: key)
+        updateKeysVisibility()
+    }
+
     // Edit & Resize mode state
     var isEditLayoutMode: Bool = false {
         didSet {
@@ -484,9 +499,15 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    private func updateKeysVisibility() {
+    func updateKeysVisibility() {
         for btn in buttons {
-            btn.isHidden = hiddenKeys.contains(btn.keyTitle)
+            let title = btn.keyTitle
+            let isHidden = hiddenKeys.contains(title)
+                || (title == "chevron.up" && (hiddenKeys.contains("↑") || hiddenKeys.contains("Lên")))
+                || (title == "chevron.down" && (hiddenKeys.contains("↓") || hiddenKeys.contains("Xuống")))
+                || (title == "chevron.left" && (hiddenKeys.contains("←") || hiddenKeys.contains("Trái")))
+                || (title == "chevron.right" && (hiddenKeys.contains("→") || hiddenKeys.contains("Phải")))
+            btn.isHidden = isHidden
         }
     }
 }

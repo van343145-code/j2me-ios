@@ -22,6 +22,92 @@ enum GameLayoutMode {
     case ngage      // Landscape fallback
 }
 
+// MARK: - Split-Screen Mini Game Pane View (Up to 6 Screens)
+
+final class SplitGamePaneView: UIView {
+    let slotIndex: Int
+    let imageView = UIImageView()
+    let headerView = UIView()
+    let titleLabel = UILabel()
+    let badgeLabel = UILabel()
+    var onTapped: ((Int) -> Void)?
+
+    init(index: Int) {
+        self.slotIndex = index
+        super.init(frame: .zero)
+        setupView()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func setupView() {
+        translatesAutoresizingMaskIntoConstraints = false
+        backgroundColor = UIColor(white: 0.08, alpha: 1.0)
+        layer.cornerRadius = 6
+        layer.borderWidth = 1.0
+        layer.borderColor = UIColor(white: 0.25, alpha: 0.8).cgColor
+        clipsToBounds = true
+
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        imageView.contentMode = .scaleAspectFit
+        imageView.clipsToBounds = true
+        imageView.backgroundColor = .black
+        addSubview(imageView)
+
+        headerView.translatesAutoresizingMaskIntoConstraints = false
+        headerView.backgroundColor = UIColor.black.withAlphaComponent(0.75)
+        addSubview(headerView)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = .systemFont(ofSize: 11, weight: .bold)
+        titleLabel.textColor = .white
+        titleLabel.text = "Tab \(slotIndex + 1)"
+        headerView.addSubview(titleLabel)
+
+        badgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        badgeLabel.font = .systemFont(ofSize: 9, weight: .semibold)
+        badgeLabel.textColor = UIColor.lightGray
+        badgeLabel.text = "Chạm để chọn"
+        headerView.addSubview(badgeLabel)
+
+        NSLayoutConstraint.activate([
+            headerView.topAnchor.constraint(equalTo: topAnchor),
+            headerView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            headerView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            headerView.heightAnchor.constraint(equalToConstant: 20),
+
+            titleLabel.leadingAnchor.constraint(equalTo: headerView.leadingAnchor, constant: 6),
+            titleLabel.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
+
+            badgeLabel.trailingAnchor.constraint(equalTo: headerView.trailingAnchor, constant: -6),
+            badgeLabel.centerYAnchor.constraint(equalTo: headerView.centerYAnchor),
+
+            imageView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
+            imageView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            imageView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(handleTap))
+        addGestureRecognizer(tap)
+        isUserInteractionEnabled = true
+    }
+
+    @objc private func handleTap() {
+        onTapped?(slotIndex)
+    }
+
+    func setFocused(_ isFocused: Bool) {
+        layer.borderWidth = isFocused ? 2.5 : 1.0
+        layer.borderColor = isFocused ? UIColor.systemBlue.cgColor : UIColor(white: 0.25, alpha: 0.8).cgColor
+        badgeLabel.textColor = isFocused ? UIColor.systemGreen : UIColor.lightGray
+        badgeLabel.text = isFocused ? "⚡ Đang chọn" : "Chạm chọn"
+        headerView.backgroundColor = isFocused ? UIColor(red: 0.08, green: 0.25, blue: 0.55, alpha: 0.85) : UIColor.black.withAlphaComponent(0.75)
+    }
+}
+
 // MARK: - GameViewController
 
 class GameViewController: UIViewController {
@@ -61,8 +147,14 @@ class GameViewController: UIViewController {
             slotFrameLock.lock()
             frameDispatchPending = false
             let frame = vc.flatMap { slotFrames[$0.activeSlot] }
-            let slot0Frame = vc.flatMap { vc in vc.tabSessions.count > 0 ? slotFrames[vc.tabSessions[0].slotIndex] : nil }
-            let slot1Frame = vc.flatMap { vc in vc.tabSessions.count > 1 ? slotFrames[vc.tabSessions[1].slotIndex] : nil }
+            var multiFrames: [Int: CGImage] = [:]
+            if let vc = vc, vc.isSplitViewEnabled {
+                for session in vc.tabSessions.prefix(6) {
+                    if let f = slotFrames[session.slotIndex] {
+                        multiFrames[session.slotIndex] = f
+                    }
+                }
+            }
             slotFrameLock.unlock()
             guard let vc = vc, !vc.isShuttingDown else { return }
             if UIApplication.shared.applicationState == .active {
@@ -75,12 +167,13 @@ class GameViewController: UIViewController {
                 return
             }
 
-            if vc.isSplitViewEnabled && vc.tabSessions.count >= 2 {
-                if let f0 = slot0Frame {
-                    vc.splitView1.layer.contents = f0
-                }
-                if let f1 = slot1Frame {
-                    vc.splitView2.layer.contents = f1
+            if vc.isSplitViewEnabled {
+                let count = min(vc.splitTargetCount, vc.tabSessions.count, vc.splitPanes.count)
+                for i in 0..<count {
+                    let slot = vc.tabSessions[i].slotIndex
+                    if let f = multiFrames[slot] {
+                        vc.splitPanes[i].imageView.layer.contents = f
+                    }
                 }
             } else if let frame = frame {
                 vc.emulatorView.layer.contents = frame
@@ -101,9 +194,8 @@ class GameViewController: UIViewController {
     nonisolated static func purgeInactiveSlotFrames() {
         let activeIdx = Int(jvm_bridge_get_focused_slot())
         slotFrameLock.lock()
-        let keysToDrop = slotFrames.keys.filter { k in
-            k != activeIdx && k != 0 && k != 1
-        }
+        let keepSlots = Set(0...6).union([activeIdx])
+        let keysToDrop = slotFrames.keys.filter { k in !keepSlots.contains(k) }
         for k in keysToDrop {
             slotFrames.removeValue(forKey: k)
         }
@@ -173,25 +265,19 @@ class GameViewController: UIViewController {
 
     // Toolbar action buttons (Camera button removed per user request)
     private let splitBtn = UIButton(type: .system)
-    private let quickKeysBtn = UIButton(type: .system)
     private let multiTabBtn = UIButton(type: .system)
     private let removeTabBtn = UIButton(type: .system)
     private let addTabBtn = UIButton(type: .system)
     private let keyboardBtn = UIButton(type: .system)
     private let menuBtn = UIButton(type: .system)
 
-    // Quick Keys & Split Tab Components
-    let quickKeysOverlay = DecadeQuickKeysOverlayView()
+    // Split-Screen Components (up to 6 screens)
     var isSplitViewEnabled: Bool = false
+    var splitTargetCount: Int = 6
     private let splitContainer = UIView()
-    private let splitView1 = UIImageView()
-    private let splitView2 = UIImageView()
-    private let splitTitle1 = UILabel()
-    private let splitTitle2 = UILabel()
-    private let splitBadge1 = UILabel()
-    private let splitBadge2 = UILabel()
-    private var splitPaneContainer1: UIView?
-    private var splitPaneContainer2: UIView?
+    private let splitMasterStack = UIStackView()
+    private var splitRowStacks: [UIStackView] = []
+    private var splitPanes: [SplitGamePaneView] = []
 
     // Legacy controls (if in ngage mode)
     private var joystickView: JoystickView?
@@ -484,11 +570,13 @@ class GameViewController: UIViewController {
         removeTabBtn.tintColor = .white
         removeTabBtn.addTarget(self, action: #selector(removeTabTapped), for: .touchUpInside)
 
-        // [+] Add New Tab Button
+        // [+] Add New Tab Button (1 tap = instant Tab 2/3/4..., long press = picker)
         let plusConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .bold)
         addTabBtn.setImage(UIImage(systemName: "plus", withConfiguration: plusConfig), for: .normal)
         addTabBtn.tintColor = .white
         addTabBtn.addTarget(self, action: #selector(addTabTapped), for: .touchUpInside)
+        let addLongPress = UILongPressGestureRecognizer(target: self, action: #selector(addTabLongPressed(_:)))
+        addTabBtn.addGestureRecognizer(addLongPress)
 
         // [🎮] Game Controller Button (toggle virtual keypad/keyboard)
         let gamePadConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .medium)
@@ -535,6 +623,7 @@ class GameViewController: UIViewController {
         keypad.keypadAlphaValue = (keypad.currentLayout == .tuoitho) ? 1.0 : max(0.35, CGFloat(savedAlpha / 255.0))
 
         keypad.translatesAutoresizingMaskIntoConstraints = false
+        keypad.loadHiddenKeys()
         self.decadeKeypadView = keypad
         view.addSubview(keypad)
 
@@ -605,18 +694,17 @@ class GameViewController: UIViewController {
             listView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
-        // 6. Split Screen Container (Hidden by default unless split mode is active)
+        // 6. Split Screen Container (Supports 2 / 4 / 6 screens)
         splitContainer.translatesAutoresizingMaskIntoConstraints = false
         splitContainer.backgroundColor = .black
         splitContainer.isHidden = true
         view.addSubview(splitContainer)
 
-        let splitStack = UIStackView()
-        splitStack.axis = .vertical
-        splitStack.spacing = 4
-        splitStack.distribution = .fillEqually
-        splitStack.translatesAutoresizingMaskIntoConstraints = false
-        splitContainer.addSubview(splitStack)
+        splitMasterStack.axis = .vertical
+        splitMasterStack.spacing = 3
+        splitMasterStack.distribution = .fillEqually
+        splitMasterStack.translatesAutoresizingMaskIntoConstraints = false
+        splitContainer.addSubview(splitMasterStack)
 
         NSLayoutConstraint.activate([
             splitContainer.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
@@ -624,30 +712,15 @@ class GameViewController: UIViewController {
             splitContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             splitContainer.bottomAnchor.constraint(equalTo: keypad.topAnchor),
 
-            splitStack.topAnchor.constraint(equalTo: splitContainer.topAnchor, constant: 2),
-            splitStack.leadingAnchor.constraint(equalTo: splitContainer.leadingAnchor, constant: 4),
-            splitStack.trailingAnchor.constraint(equalTo: splitContainer.trailingAnchor, constant: -4),
-            splitStack.bottomAnchor.constraint(equalTo: splitContainer.bottomAnchor, constant: -2),
-        ])
-
-        setupSplitPane(pane: splitView1, titleLabel: splitTitle1, badgeLabel: splitBadge1, slotIndex: 0, in: splitStack)
-        setupSplitPane(pane: splitView2, titleLabel: splitTitle2, badgeLabel: splitBadge2, slotIndex: 1, in: splitStack)
-
-        // 7. Quick Keys Floating Overlay
-        quickKeysOverlay.translatesAutoresizingMaskIntoConstraints = false
-        quickKeysOverlay.gameId = currentGameId
-        view.addSubview(quickKeysOverlay)
-        NSLayoutConstraint.activate([
-            quickKeysOverlay.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
-            quickKeysOverlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            quickKeysOverlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            quickKeysOverlay.bottomAnchor.constraint(equalTo: keypad.topAnchor),
+            splitMasterStack.topAnchor.constraint(equalTo: splitContainer.topAnchor, constant: 2),
+            splitMasterStack.leadingAnchor.constraint(equalTo: splitContainer.leadingAnchor, constant: 2),
+            splitMasterStack.trailingAnchor.constraint(equalTo: splitContainer.trailingAnchor, constant: -2),
+            splitMasterStack.bottomAnchor.constraint(equalTo: splitContainer.bottomAnchor, constant: -2),
         ])
 
         view.bringSubviewToFront(topToolbar)
         view.bringSubviewToFront(keypad)
         view.bringSubviewToFront(floatingShowKeypadBtn)
-        view.bringSubviewToFront(quickKeysOverlay)
     }
 
     private func styleToolbarButton(_ btn: UIButton, title: String, action: Selector) {
@@ -668,12 +741,12 @@ class GameViewController: UIViewController {
 
     private func createTabButton(index: Int) {
         let tabBtn = UIButton(type: .custom)
-        tabBtn.setTitle("\(index + 1)", for: .normal)
-        tabBtn.titleLabel?.font = .systemFont(ofSize: 15, weight: .bold)
+        tabBtn.setTitle("Tab \(index + 1)", for: .normal)
+        tabBtn.titleLabel?.font = .systemFont(ofSize: 13, weight: .bold)
         tabBtn.layer.cornerRadius = 0
         tabBtn.tag = index
         tabBtn.translatesAutoresizingMaskIntoConstraints = false
-        tabBtn.widthAnchor.constraint(equalToConstant: 46).isActive = true
+        tabBtn.contentEdgeInsets = UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
         tabBtn.addTarget(self, action: #selector(tabButtonTapped(_:)), for: .touchUpInside)
 
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(tabButtonLongPressed(_:)))
@@ -763,7 +836,7 @@ class GameViewController: UIViewController {
         forgetFrame(for: slot)
         for (i, button) in tabButtons.enumerated() {
             button.tag = i
-            button.setTitle("\(i + 1)", for: .normal)
+            button.setTitle("Tab \(i + 1)", for: .normal)
         }
         let newActive = tabSessions.firstIndex(where: { $0.slotIndex == previousSlot })
             ?? min(index, tabSessions.count - 1)
@@ -772,6 +845,8 @@ class GameViewController: UIViewController {
         updateTabStripVisibility()
         if tabSessions.count < 2 && isSplitViewEnabled {
             disableSplitView()
+        } else if isSplitViewEnabled {
+            setupSplitGrid(count: min(splitTargetCount, tabSessions.count))
         }
         updateSplitFocusBorders()
         NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
@@ -864,8 +939,8 @@ class GameViewController: UIViewController {
             }
         }
 
-        quickKeysOverlay.gameId = currentGameId
-        quickKeysOverlay.isHidden = UserDefaults.standard.bool(forKey: "quick_keys_hidden_\(currentGameId)")
+        keypad.loadHiddenKeys()
+        keypad.updateKeysVisibility()
         updateTabStripVisibility()
         updateSplitFocusBorders()
 
@@ -958,31 +1033,61 @@ class GameViewController: UIViewController {
             showToast(message: "Hiện chưa còn slot trống để thêm tab.")
             return
         }
+        duplicateActiveTab(count: 1)
+        showToast(message: "Đã thêm Tab \(tabSessions.count)")
+    }
+
+    @objc private func addTabLongPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        showAddTabOptionsSheet()
+    }
+
+    private func showAddTabOptionsSheet() {
+        guard !availableSlots.isEmpty, !isShuttingDown else {
+            showToast(message: "Hiện chưa còn slot trống để thêm tab.")
+            return
+        }
 
         let installedApps = AppsListViewController.loadInstalledApps()
 
         let alert = UIAlertController(
-            title: "➕ Thêm Tab Game",
-            message: "Chọn game để chạy trên Tab \(tabButtons.count + 1):",
+            title: "➕ Thêm / Nhân Bản Tab Game",
+            message: "Chọn tùy chọn mở tab:",
             preferredStyle: .actionSheet
         )
 
-        // 1. Current game option (Quick add / cloning)
-        alert.addAction(UIAlertAction(title: "▶ Thêm Tab cho [\(appName)] (Tab \(tabButtons.count + 1))", style: .default) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "➕ Nhân bản 1 Tab [\(appName)]", style: .default) { [weak self] _ in
             self?.duplicateActiveTab(count: 1)
+            if let count = self?.tabSessions.count {
+                self?.showToast(message: "Đã thêm Tab \(count)")
+            }
         })
 
-        // 2. Installed games options from lobby / library
+        if availableSlots.count >= 3 {
+            alert.addAction(UIAlertAction(title: "➕➕ Nhân bản nhanh 3 Tab (Lên 4 Tab)", style: .default) { [weak self] _ in
+                self?.duplicateActiveTab(count: 3)
+                if let count = self?.tabSessions.count {
+                    self?.showToast(message: "Đã thêm 3 Tab (Tổng: \(count) Tab)")
+                }
+            })
+        }
+
+        if availableSlots.count >= 5 {
+            alert.addAction(UIAlertAction(title: "➕➕➕ Nhân bản nhanh 5 Tab (Lên 6 Tab cày game)", style: .default) { [weak self] _ in
+                self?.duplicateActiveTab(count: 5)
+                if let count = self?.tabSessions.count {
+                    self?.showToast(message: "Đã thêm 5 Tab (Tổng: \(count) Tab)")
+                }
+            })
+        }
+
         for app in installedApps {
-            if app.path != self.jarPath {
-                alert.addAction(UIAlertAction(title: "🎮 " + app.name, style: .default) { [weak self] _ in
-                    self?.addInstalledGame(app, count: 1)
-                })
-            }
+            alert.addAction(UIAlertAction(title: "🎮 Mở [\(app.name)]", style: .default) { [weak self] _ in
+                self?.addInstalledGame(app, count: 1)
+            })
         }
 
         alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
-
         if let popover = alert.popoverPresentationController {
             popover.sourceView = addTabBtn
             popover.sourceRect = addTabBtn.bounds
@@ -1070,38 +1175,46 @@ class GameViewController: UIViewController {
     }
 
     private func toggleSplitView() {
-        guard tabSessions.count >= 2 else {
-            let alert = UIAlertController(
-                title: "Chia Tab Đa Game",
-                message: "Bạn cần ít nhất 2 tab game đang chạy để chia màn hình. Bạn có muốn nhân bản tab hiện tại không?",
-                preferredStyle: .alert
-            )
-            alert.addAction(UIAlertAction(title: "➕ Nhân bản tab hiện tại", style: .default) { [weak self] _ in
-                self?.duplicateActiveTab(count: 1)
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                    self?.enableSplitView()
-                }
-            })
-            alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
-            present(alert, animated: true)
-            return
-        }
-
+        let sheet = UIAlertController(
+            title: "⧉ Chia Màn Hình Đa Game",
+            message: "Chọn chế độ chia màn hình hiển thị đồng thời:",
+            preferredStyle: .actionSheet
+        )
+        sheet.addAction(UIAlertAction(title: "📱 6 Màn Hình (Chuẩn cày 6 acc)", style: .default) { [weak self] _ in
+            self?.enableSplitView(count: 6)
+        })
+        sheet.addAction(UIAlertAction(title: "📱 4 Màn Hình (2x2)", style: .default) { [weak self] _ in
+            self?.enableSplitView(count: 4)
+        })
+        sheet.addAction(UIAlertAction(title: "📱 2 Màn Hình (Trên / Dưới)", style: .default) { [weak self] _ in
+            self?.enableSplitView(count: 2)
+        })
         if isSplitViewEnabled {
-            disableSplitView()
-        } else {
-            enableSplitView()
+            sheet.addAction(UIAlertAction(title: "❌ Tắt Chia Màn Hình", style: .destructive) { [weak self] _ in
+                self?.disableSplitView()
+            })
         }
+        sheet.addAction(UIAlertAction(title: "Hủy", style: .cancel))
+        if let pop = sheet.popoverPresentationController {
+            pop.sourceView = topToolbar
+            pop.sourceRect = topToolbar.bounds
+        }
+        present(sheet, animated: true)
     }
 
-    private func enableSplitView() {
-        guard tabSessions.count >= 2 else { return }
+    private func enableSplitView(count: Int = 6) {
+        splitTargetCount = count
+        if tabSessions.count < count {
+            let needed = count - tabSessions.count
+            duplicateActiveTab(count: needed)
+        }
+        setupSplitGrid(count: count)
         isSplitViewEnabled = true
         splitBtn.tintColor = UIColor.systemGreen
         splitContainer.isHidden = false
         emulatorView.isHidden = true
         updateSplitFocusBorders()
-        showToast(message: "Đã bật: Chia màn hình chạy đa game (2 Tab)")
+        showToast(message: "Đã bật: Chia màn hình (\(count) Tab)")
     }
 
     private func disableSplitView() {
@@ -1115,104 +1228,50 @@ class GameViewController: UIViewController {
         showToast(message: "Đã tắt chế độ chia màn hình")
     }
 
-    private func setupSplitPane(pane: UIImageView, titleLabel: UILabel, badgeLabel: UILabel, slotIndex: Int, in stack: UIStackView) {
-        let container = UIView()
-        container.translatesAutoresizingMaskIntoConstraints = false
-        container.backgroundColor = UIColor(white: 0.1, alpha: 1.0)
-        container.layer.cornerRadius = 8
-        container.layer.borderWidth = (slotIndex == 0) ? 2.5 : 1.0
-        container.layer.borderColor = (slotIndex == 0) ? UIColor.systemBlue.cgColor : UIColor(white: 0.3, alpha: 0.8).cgColor
-        container.clipsToBounds = true
-
-        pane.translatesAutoresizingMaskIntoConstraints = false
-        pane.contentMode = .scaleAspectFit
-        pane.clipsToBounds = true
-        pane.backgroundColor = .black
-        container.addSubview(pane)
-
-        let header = UIView()
-        header.translatesAutoresizingMaskIntoConstraints = false
-        header.backgroundColor = UIColor.black.withAlphaComponent(0.65)
-        container.addSubview(header)
-
-        titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        titleLabel.font = .systemFont(ofSize: 12, weight: .bold)
-        titleLabel.textColor = .white
-        titleLabel.text = "Tab \(slotIndex + 1)"
-        header.addSubview(titleLabel)
-
-        badgeLabel.translatesAutoresizingMaskIntoConstraints = false
-        badgeLabel.font = .systemFont(ofSize: 10, weight: .semibold)
-        badgeLabel.textColor = (slotIndex == 0) ? UIColor.systemGreen : UIColor.lightGray
-        badgeLabel.text = (slotIndex == 0) ? "⚡ Đang điều khiển" : "Chạm để chọn"
-        header.addSubview(badgeLabel)
-
-        NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: container.topAnchor),
-            header.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            header.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            header.heightAnchor.constraint(equalToConstant: 22),
-
-            titleLabel.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 8),
-            titleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-
-            badgeLabel.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -8),
-            badgeLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
-
-            pane.topAnchor.constraint(equalTo: header.bottomAnchor),
-            pane.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            pane.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-            pane.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-        ])
-
-        let tap = UITapGestureRecognizer(target: self, action: (slotIndex == 0) ? #selector(splitPane1Tapped) : #selector(splitPane2Tapped))
-        container.addGestureRecognizer(tap)
-        container.isUserInteractionEnabled = true
-
-        if slotIndex == 0 {
-            splitPaneContainer1 = container
-        } else {
-            splitPaneContainer2 = container
+    private func setupSplitGrid(count: Int) {
+        for row in splitRowStacks {
+            row.removeFromSuperview()
         }
-        stack.addArrangedSubview(container)
-    }
+        splitRowStacks.removeAll()
+        splitPanes.removeAll()
 
-    @objc private func splitPane1Tapped() {
-        if activeTabIndex != 0 {
-            selectTab(at: 0)
-        }
-    }
+        let cols = (count <= 2) ? 1 : 2
+        let rows = (count + cols - 1) / cols
 
-    @objc private func splitPane2Tapped() {
-        if activeTabIndex != 1 && tabSessions.count > 1 {
-            selectTab(at: 1)
+        var paneIdx = 0
+        for _ in 0..<rows {
+            let rowStack = UIStackView()
+            rowStack.axis = .horizontal
+            rowStack.spacing = 3
+            rowStack.distribution = .fillEqually
+            rowStack.translatesAutoresizingMaskIntoConstraints = false
+            splitMasterStack.addArrangedSubview(rowStack)
+            splitRowStacks.append(rowStack)
+
+            for _ in 0..<cols {
+                if paneIdx < count {
+                    let pane = SplitGamePaneView(index: paneIdx)
+                    pane.onTapped = { [weak self] idx in
+                        self?.selectTab(at: idx)
+                    }
+                    rowStack.addArrangedSubview(pane)
+                    splitPanes.append(pane)
+                    paneIdx += 1
+                }
+            }
         }
     }
 
     private func updateSplitFocusBorders() {
-        let isTab0 = (activeTabIndex == 0)
-        splitPaneContainer1?.layer.borderWidth = isTab0 ? 2.5 : 1.0
-        splitPaneContainer1?.layer.borderColor = isTab0 ? UIColor.systemBlue.cgColor : UIColor(white: 0.3, alpha: 0.8).cgColor
-        splitBadge1.textColor = isTab0 ? UIColor.systemGreen : UIColor.lightGray
-        splitBadge1.text = isTab0 ? "⚡ Đang điều khiển" : "Chạm để chọn"
-
-        let isTab1 = (activeTabIndex == 1)
-        splitPaneContainer2?.layer.borderWidth = isTab1 ? 2.5 : 1.0
-        splitPaneContainer2?.layer.borderColor = isTab1 ? UIColor.systemBlue.cgColor : UIColor(white: 0.3, alpha: 0.8).cgColor
-        splitBadge2.textColor = isTab1 ? UIColor.systemGreen : UIColor.lightGray
-        splitBadge2.text = isTab1 ? "⚡ Đang điều khiển" : "Chạm để chọn"
-
-        if tabSessions.count > 0 {
-            splitTitle1.text = "Tab 1: \(tabSessions[0].appName)"
-        }
-        if tabSessions.count > 1 {
-            splitTitle2.text = "Tab 2: \(tabSessions[1].appName)"
-        }
-    }
-
-    @objc private func quickKeysTapped() {
-        DecadeQuickKeysManager.showMainManager(in: self, overlayView: quickKeysOverlay) { [weak self] msg in
-            self?.showToast(message: msg)
+        for (i, pane) in splitPanes.enumerated() {
+            let isFocused = (i == activeTabIndex)
+            pane.setFocused(isFocused)
+            if i < tabSessions.count {
+                pane.titleLabel.text = "Tab \(i + 1): \(tabSessions[i].appName)"
+                pane.isHidden = false
+            } else {
+                pane.titleLabel.text = "Tab \(i + 1)"
+            }
         }
     }
 
@@ -1244,12 +1303,6 @@ class GameViewController: UIViewController {
         popup.onToggleKeyboardVisibility = { [weak self] in
             self?.toggleKeypadVisibility()
         }
-        popup.onManageQuickKeys = { [weak self] in
-            guard let self = self else { return }
-            DecadeQuickKeysManager.showMainManager(in: self, overlayView: self.quickKeysOverlay) { msg in
-                self.showToast(message: msg)
-            }
-        }
         popup.onToggleSplitView = { [weak self] in
             self?.toggleSplitView()
         }
@@ -1263,8 +1316,19 @@ class GameViewController: UIViewController {
         popup.show(in: view)
     }
 
+    private func showHideKeysDialog() {
+        guard let keypad = self.decadeKeypadView else { return }
+        let gid = self.currentGameId
+        let dialog = DecadeHideButtonsDialog(gameId: gid, currentHiddenKeys: keypad.hiddenKeys) { [weak self] newHiddenKeys in
+            keypad.hiddenKeys = newHiddenKeys
+            keypad.saveHiddenKeys()
+            self?.showToast(message: "Đã cập nhật hiển thị nút bàn phím")
+        }
+        self.present(dialog, animated: true)
+    }
+
     private func promptChangeKeyboardLayout() {
-        let alert = UIAlertController(title: "Cài Đặt Bàn Phím", message: "Chọn kiểu bàn phím ảo hiển thị:", preferredStyle: .actionSheet)
+        let alert = UIAlertController(title: "Cài Đặt Bàn Phím", message: "Chọn kiểu bàn phím hoặc chỉnh sửa phím ảo:", preferredStyle: .actionSheet)
         alert.addAction(UIAlertAction(title: "⭐️ Bản Tuổi Thơ (Chuẩn Mới)", style: .default) { [weak self] _ in
             guard let self = self else { return }
             self.decadeKeypadView?.currentLayout = .tuoitho
@@ -1288,6 +1352,9 @@ class GameViewController: UIViewController {
             self.decadeKeypadView?.currentLayout = .combined
             UserDefaults.standard.set(3, forKey: "keypad_layout_\(self.currentGameId)")
             self.showToast(message: "Đã chọn Bàn phím Kết Hợp")
+        })
+        alert.addAction(UIAlertAction(title: "👁️ Thêm / Xoá Nút Phím Số (1, 2, 3...)", style: .default) { [weak self] _ in
+            self?.showHideKeysDialog()
         })
         alert.addAction(UIAlertAction(title: "Đóng", style: .cancel))
         if let popover = alert.popoverPresentationController {
@@ -1759,16 +1826,10 @@ class GameViewController: UIViewController {
         }
 
         let hideButtonsItem = UIAction(
-            title: "Ẩn nút",
+            title: "👁️ Thêm / Xoá Nút Phím Số (1, 2, 3...)",
             image: UIImage(systemName: "eye.slash")
         ) { [weak self] _ in
-            guard let self = self, let keypad = self.decadeKeypadView else { return }
-            let gid = self.appName.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
-            let dialog = DecadeHideButtonsDialog(gameId: gid, currentHiddenKeys: keypad.hiddenKeys) { [weak self] newHiddenKeys in
-                keypad.hiddenKeys = newHiddenKeys
-                self?.showToast(message: "Đã cập nhật hiển thị nút")
-            }
-            self.present(dialog, animated: true)
+            self?.showHideKeysDialog()
         }
 
         let textInputItem = UIAction(
@@ -1776,13 +1837,6 @@ class GameViewController: UIViewController {
             image: UIImage(systemName: "character.cursor.ibeam")
         ) { [weak self] _ in
             self?.promptTextInput()
-        }
-
-        let quickKeysItem = UIAction(
-            title: "⚡ Quản lý phím nhanh",
-            image: UIImage(systemName: "bolt.fill")
-        ) { [weak self] _ in
-            self?.quickKeysTapped()
         }
 
         let splitTabItem = UIAction(
@@ -1796,7 +1850,6 @@ class GameViewController: UIViewController {
             title: "Bàn phím ảo",
             children: [
                 toggleKeypadItem,
-                quickKeysItem,
                 splitTabItem,
                 editLayoutItem,
                 scaleLayoutItem,
@@ -1815,11 +1868,6 @@ class GameViewController: UIViewController {
         let hideTitle = isKeypadHidden ? "Bàn phím ảo (Đang tắt)" : "Bàn phím ảo (Đang bật)"
         alert.addAction(UIAlertAction(title: hideTitle, style: .default) { [weak self] _ in
             self?.toggleKeypadVisibility()
-        })
-
-        // 1b. Quản lý phím nhanh
-        alert.addAction(UIAlertAction(title: "⚡ Quản lý phím nhanh", style: .default) { [weak self] _ in
-            self?.quickKeysTapped()
         })
 
         // 1c. Chia màn hình đa game
@@ -1864,15 +1912,9 @@ class GameViewController: UIViewController {
             self?.showLayoutSwitchDialog()
         })
 
-        // 6. Ẩn nút
-        alert.addAction(UIAlertAction(title: "Ẩn nút", style: .default) { [weak self] _ in
-            guard let self = self, let keypad = self.decadeKeypadView else { return }
-            let gid = self.appName.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
-            let dialog = DecadeHideButtonsDialog(gameId: gid, currentHiddenKeys: keypad.hiddenKeys) { [weak self] newHiddenKeys in
-                keypad.hiddenKeys = newHiddenKeys
-                self?.showToast(message: "Đã cập nhật hiển thị nút")
-            }
-            self.present(dialog, animated: true)
+        // 6. Thêm / Xóa nút phím số
+        alert.addAction(UIAlertAction(title: "👁️ Thêm / Xoá Nút Phím Số (1, 2, 3...)", style: .default) { [weak self] _ in
+            self?.showHideKeysDialog()
         })
 
         // 7. Nhập văn bản (IME)

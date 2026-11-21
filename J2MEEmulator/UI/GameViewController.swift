@@ -593,15 +593,15 @@ class GameViewController: UIViewController {
             tabScrollView.leadingAnchor.constraint(equalTo: topToolbar.leadingAnchor),
             tabScrollView.topAnchor.constraint(equalTo: topToolbar.topAnchor),
             tabScrollView.bottomAnchor.constraint(equalTo: topToolbar.bottomAnchor),
-            tabScrollView.trailingAnchor.constraint(lessThanOrEqualTo: actionStack.leadingAnchor, constant: -10),
+            tabScrollView.trailingAnchor.constraint(equalTo: actionStack.leadingAnchor, constant: -6),
 
-            tabStrip.leadingAnchor.constraint(equalTo: tabScrollView.leadingAnchor),
-            tabStrip.trailingAnchor.constraint(equalTo: tabScrollView.trailingAnchor),
-            tabStrip.topAnchor.constraint(equalTo: tabScrollView.topAnchor),
-            tabStrip.bottomAnchor.constraint(equalTo: tabScrollView.bottomAnchor),
-            tabStrip.heightAnchor.constraint(equalTo: topToolbar.heightAnchor),
+            tabStrip.leadingAnchor.constraint(equalTo: tabScrollView.contentLayoutGuide.leadingAnchor),
+            tabStrip.trailingAnchor.constraint(equalTo: tabScrollView.contentLayoutGuide.trailingAnchor),
+            tabStrip.topAnchor.constraint(equalTo: tabScrollView.contentLayoutGuide.topAnchor),
+            tabStrip.bottomAnchor.constraint(equalTo: tabScrollView.contentLayoutGuide.bottomAnchor),
+            tabStrip.heightAnchor.constraint(equalTo: tabScrollView.frameLayoutGuide.heightAnchor),
 
-            actionStack.trailingAnchor.constraint(equalTo: topToolbar.trailingAnchor, constant: -14),
+            actionStack.trailingAnchor.constraint(equalTo: topToolbar.trailingAnchor, constant: -12),
             actionStack.centerYAnchor.constraint(equalTo: topToolbar.centerYAnchor),
         ])
 
@@ -746,7 +746,8 @@ class GameViewController: UIViewController {
         tabBtn.layer.cornerRadius = 0
         tabBtn.tag = index
         tabBtn.translatesAutoresizingMaskIntoConstraints = false
-        tabBtn.contentEdgeInsets = UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 10)
+        tabBtn.widthAnchor.constraint(equalToConstant: 58).isActive = true
+        tabBtn.heightAnchor.constraint(equalToConstant: 38).isActive = true
         tabBtn.addTarget(self, action: #selector(tabButtonTapped(_:)), for: .touchUpInside)
 
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(tabButtonLongPressed(_:)))
@@ -776,7 +777,13 @@ class GameViewController: UIViewController {
     }
 
     @objc private func tabButtonTapped(_ sender: UIButton) {
-        selectTab(at: sender.tag)
+        let tapped = sender.tag
+        if isSplitViewEnabled && activeTabIndex == tapped {
+            disableSplitView()
+            showToast(message: "Toàn màn hình Tab \(tapped + 1)")
+        } else {
+            selectTab(at: tapped)
+        }
     }
 
     @objc private func tabButtonLongPressed(_ gesture: UILongPressGestureRecognizer) {
@@ -1186,11 +1193,14 @@ class GameViewController: UIViewController {
         sheet.addAction(UIAlertAction(title: "📱 4 Màn Hình (2x2)", style: .default) { [weak self] _ in
             self?.enableSplitView(count: 4)
         })
+        sheet.addAction(UIAlertAction(title: "📱 3 Màn Hình", style: .default) { [weak self] _ in
+            self?.enableSplitView(count: 3)
+        })
         sheet.addAction(UIAlertAction(title: "📱 2 Màn Hình (Trên / Dưới)", style: .default) { [weak self] _ in
             self?.enableSplitView(count: 2)
         })
         if isSplitViewEnabled {
-            sheet.addAction(UIAlertAction(title: "❌ Tắt Chia Màn Hình", style: .destructive) { [weak self] _ in
+            sheet.addAction(UIAlertAction(title: "❌ Tắt Chia Màn Hình (Toàn Màn Hình 1 Game)", style: .destructive) { [weak self] _ in
                 self?.disableSplitView()
             })
         }

@@ -16,8 +16,10 @@ final class TuoiThoPopupMenuView: UIView {
     var onOpenKeyboardSettings: (() -> Void)?
     var onArrangeKeyboard: (() -> Void)?
     var onToggleKeyboardVisibility: (() -> Void)?
+    var onOpenNativeKeyboard: (() -> Void)?
     var onToggleSplitView: (() -> Void)?
     var onRestartGame: (() -> Void)?
+    var onBackToList: (() -> Void)?
     var onExitGame: (() -> Void)?
 
     private let backdropView = UIView()
@@ -144,6 +146,15 @@ final class TuoiThoPopupMenuView: UIView {
         self.hideKeypadBtn = btnHideKb
         contentStack.addArrangedSubview(btnHideKb)
 
+        // 4b. Bàn Phím Gốc QWERTY (Keyboard icon xanh dương - hiện bàn phím iPhone gốc)
+        let btnNativeKb = makeMenuItem(
+            iconName: "keyboard.badge.ellipsis",
+            iconColor: UIColor(red: 0.12, green: 0.58, blue: 0.95, alpha: 1.0),
+            title: "Bàn Phím Gốc QWERTY",
+            action: #selector(handleNativeKb)
+        )
+        contentStack.addArrangedSubview(btnNativeKb)
+
         // 4c. Chia Màn Hình / Split View (Rectangle split icon xanh dương)
         let btnSplit = makeMenuItem(
             iconName: "rectangle.split.2x1.fill",
@@ -161,6 +172,15 @@ final class TuoiThoPopupMenuView: UIView {
             action: #selector(handleRestart)
         )
         contentStack.addArrangedSubview(btnRestart)
+
+        // 5c. Danh Sách Game (Quay lại danh sách chọn game)
+        let btnGameList = makeMenuItem(
+            iconName: "square.grid.2x2",
+            iconColor: UIColor(red: 0.12, green: 0.58, blue: 0.95, alpha: 1.0),
+            title: "Danh Sách Chọn Game",
+            action: #selector(handleBackToList)
+        )
+        contentStack.addArrangedSubview(btnGameList)
 
         // Divider
         contentStack.addArrangedSubview(makeSeparator())
@@ -299,6 +319,18 @@ final class TuoiThoPopupMenuView: UIView {
     @objc private func handleRestart() {
         dismissMenu { [weak self] in
             self?.onRestartGame?()
+        }
+    }
+
+    @objc private func handleNativeKb() {
+        dismissMenu { [weak self] in
+            self?.onOpenNativeKeyboard?()
+        }
+    }
+
+    @objc private func handleBackToList() {
+        dismissMenu { [weak self] in
+            self?.onBackToList?()
         }
     }
 

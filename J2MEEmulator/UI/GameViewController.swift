@@ -110,7 +110,7 @@ final class SplitGamePaneView: UIView {
 
 // MARK: - GameViewController
 
-class GameViewController: UIViewController {
+class GameViewController: UIViewController, UITextFieldDelegate {
 
     var jarPath: String
     var appName: String
@@ -264,12 +264,19 @@ class GameViewController: UIViewController {
     private let floatingShowKeypadBtn = UIButton(type: .system)
 
     // Toolbar action buttons (Camera button removed per user request)
+    private let backToListBtn = UIButton(type: .system)
     private let splitBtn = UIButton(type: .system)
     private let multiTabBtn = UIButton(type: .system)
     private let removeTabBtn = UIButton(type: .system)
     private let addTabBtn = UIButton(type: .system)
+    private let nativeKeyboardBtn = UIButton(type: .system)
     private let keyboardBtn = UIButton(type: .system)
     private let menuBtn = UIButton(type: .system)
+
+    // Native QWERTY Phone Keyboard Bar (like Chơi Game Tuổi Thơ)
+    private let nativeChatBar = UIView()
+    private let nativeTextField = UITextField()
+    private var nativeChatBarBottomConstraint: NSLayoutConstraint?
 
     // Split-Screen Components (up to 6 screens)
     var isSplitViewEnabled: Bool = false
@@ -536,6 +543,14 @@ class GameViewController: UIViewController {
         topToolbar.clipsToBounds = true
         view.addSubview(topToolbar)
 
+        // [ ‹ ] Back to Game Selection List Button
+        let backConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .bold)
+        backToListBtn.setImage(UIImage(systemName: "chevron.backward", withConfiguration: backConfig), for: .normal)
+        backToListBtn.tintColor = .white
+        backToListBtn.addTarget(self, action: #selector(backButtonTapped), for: .touchUpInside)
+        backToListBtn.translatesAutoresizingMaskIntoConstraints = false
+        topToolbar.addSubview(backToListBtn)
+
         // Tab Scroll View on the LEFT side of topToolbar
         tabScrollView.showsHorizontalScrollIndicator = false
         tabScrollView.showsVerticalScrollIndicator = false
@@ -549,10 +564,10 @@ class GameViewController: UIViewController {
         tabStrip.translatesAutoresizingMaskIntoConstraints = false
         tabScrollView.addSubview(tabStrip)
 
-        // Action Buttons on the RIGHT side of topToolbar: [⋮] [-] [+] [🎮]
+        // Action Buttons on the RIGHT side of topToolbar: [⋮] [-] [+] [⌨] [🎮]
         let actionStack = UIStackView()
         actionStack.axis = .horizontal
-        actionStack.spacing = 18
+        actionStack.spacing = 13
         actionStack.alignment = .center
         actionStack.translatesAutoresizingMaskIntoConstraints = false
         topToolbar.addSubview(actionStack)
@@ -570,13 +585,19 @@ class GameViewController: UIViewController {
         removeTabBtn.tintColor = .white
         removeTabBtn.addTarget(self, action: #selector(removeTabTapped), for: .touchUpInside)
 
-        // [+] Add New Tab Button (1 tap = instant Tab 2/3/4..., long press = picker)
+        // [+] Add New Tab Button (1 tap = choose game / clone tab)
         let plusConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .bold)
         addTabBtn.setImage(UIImage(systemName: "plus", withConfiguration: plusConfig), for: .normal)
         addTabBtn.tintColor = .white
         addTabBtn.addTarget(self, action: #selector(addTabTapped), for: .touchUpInside)
         let addLongPress = UILongPressGestureRecognizer(target: self, action: #selector(addTabLongPressed(_:)))
         addTabBtn.addGestureRecognizer(addLongPress)
+
+        // [⌨] Native QWERTY Phone Keyboard Button (like Chơi Game Tuổi Thơ)
+        let kbConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .medium)
+        nativeKeyboardBtn.setImage(UIImage(systemName: "keyboard", withConfiguration: kbConfig), for: .normal)
+        nativeKeyboardBtn.tintColor = UIColor(white: 0.90, alpha: 1.0)
+        nativeKeyboardBtn.addTarget(self, action: #selector(nativeKeyboardTapped), for: .touchUpInside)
 
         // [🎮] Game Controller Button (toggle virtual keypad/keyboard)
         let gamePadConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .medium)
@@ -587,10 +608,16 @@ class GameViewController: UIViewController {
         actionStack.addArrangedSubview(menuBtn)
         actionStack.addArrangedSubview(removeTabBtn)
         actionStack.addArrangedSubview(addTabBtn)
+        actionStack.addArrangedSubview(nativeKeyboardBtn)
         actionStack.addArrangedSubview(keyboardBtn)
 
         NSLayoutConstraint.activate([
-            tabScrollView.leadingAnchor.constraint(equalTo: topToolbar.leadingAnchor),
+            backToListBtn.leadingAnchor.constraint(equalTo: topToolbar.leadingAnchor, constant: 6),
+            backToListBtn.centerYAnchor.constraint(equalTo: topToolbar.centerYAnchor),
+            backToListBtn.widthAnchor.constraint(equalToConstant: 34),
+            backToListBtn.heightAnchor.constraint(equalToConstant: 38),
+
+            tabScrollView.leadingAnchor.constraint(equalTo: backToListBtn.trailingAnchor, constant: 2),
             tabScrollView.topAnchor.constraint(equalTo: topToolbar.topAnchor),
             tabScrollView.bottomAnchor.constraint(equalTo: topToolbar.bottomAnchor),
             tabScrollView.trailingAnchor.constraint(equalTo: actionStack.leadingAnchor, constant: -6),
@@ -601,12 +628,13 @@ class GameViewController: UIViewController {
             tabStrip.bottomAnchor.constraint(equalTo: tabScrollView.contentLayoutGuide.bottomAnchor),
             tabStrip.heightAnchor.constraint(equalTo: tabScrollView.frameLayoutGuide.heightAnchor),
 
-            actionStack.trailingAnchor.constraint(equalTo: topToolbar.trailingAnchor, constant: -12),
+            actionStack.trailingAnchor.constraint(equalTo: topToolbar.trailingAnchor, constant: -10),
             actionStack.centerYAnchor.constraint(equalTo: topToolbar.centerYAnchor),
         ])
 
         createTabButton(index: 0)
         selectTab(at: 0)
+        setupNativeChatBar()
 
         // 3. Virtual Keypad at bottom
         let keypad = DecadeKeypadView()
@@ -1036,12 +1064,7 @@ class GameViewController: UIViewController {
     }
 
     @objc private func addTabTapped() {
-        guard !availableSlots.isEmpty, !isShuttingDown else {
-            showToast(message: "Hiện chưa còn slot trống để thêm tab.")
-            return
-        }
-        duplicateActiveTab(count: 1)
-        showToast(message: "Đã thêm Tab \(tabSessions.count)")
+        showAddTabOptionsSheet()
     }
 
     @objc private func addTabLongPressed(_ gesture: UILongPressGestureRecognizer) {
@@ -1056,22 +1079,31 @@ class GameViewController: UIViewController {
         }
 
         let installedApps = AppsListViewController.loadInstalledApps()
+        let activeGameName = (activeTabIndex < tabSessions.count) ? tabSessions[activeTabIndex].appName : appName
 
         let alert = UIAlertController(
-            title: "➕ Thêm / Nhân Bản Tab Game",
-            message: "Chọn tùy chọn mở tab:",
+            title: "➕ Thêm Tab Mới",
+            message: "Chọn game để mở trong Tab \(tabSessions.count + 1):",
             preferredStyle: .actionSheet
         )
 
-        alert.addAction(UIAlertAction(title: "➕ Nhân bản 1 Tab [\(appName)]", style: .default) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "➕ Nhân bản game này: [\(activeGameName)]", style: .default) { [weak self] _ in
             self?.duplicateActiveTab(count: 1)
             if let count = self?.tabSessions.count {
                 self?.showToast(message: "Đã thêm Tab \(count)")
             }
         })
 
+        for app in installedApps {
+            if app.path != self.jarPath {
+                alert.addAction(UIAlertAction(title: "🎮 [\(app.name)]", style: .default) { [weak self] _ in
+                    self?.addInstalledGame(app, count: 1)
+                })
+            }
+        }
+
         if availableSlots.count >= 3 {
-            alert.addAction(UIAlertAction(title: "➕➕ Nhân bản nhanh 3 Tab (Lên 4 Tab)", style: .default) { [weak self] _ in
+            alert.addAction(UIAlertAction(title: "➕➕ Mở nhanh 3 Tab [\(activeGameName)]", style: .default) { [weak self] _ in
                 self?.duplicateActiveTab(count: 3)
                 if let count = self?.tabSessions.count {
                     self?.showToast(message: "Đã thêm 3 Tab (Tổng: \(count) Tab)")
@@ -1080,17 +1112,11 @@ class GameViewController: UIViewController {
         }
 
         if availableSlots.count >= 5 {
-            alert.addAction(UIAlertAction(title: "➕➕➕ Nhân bản nhanh 5 Tab (Lên 6 Tab cày game)", style: .default) { [weak self] _ in
+            alert.addAction(UIAlertAction(title: "➕➕➕ Mở nhanh 5 Tab [\(activeGameName)]", style: .default) { [weak self] _ in
                 self?.duplicateActiveTab(count: 5)
                 if let count = self?.tabSessions.count {
                     self?.showToast(message: "Đã thêm 5 Tab (Tổng: \(count) Tab)")
                 }
-            })
-        }
-
-        for app in installedApps {
-            alert.addAction(UIAlertAction(title: "🎮 Mở [\(app.name)]", style: .default) { [weak self] _ in
-                self?.addInstalledGame(app, count: 1)
             })
         }
 
@@ -1316,8 +1342,14 @@ class GameViewController: UIViewController {
         popup.onToggleSplitView = { [weak self] in
             self?.toggleSplitView()
         }
+        popup.onOpenNativeKeyboard = { [weak self] in
+            self?.nativeKeyboardTapped()
+        }
         popup.onRestartGame = { [weak self] in
             self?.restartGameSession()
+        }
+        popup.onBackToList = { [weak self] in
+            self?.backButtonTapped()
         }
         popup.onExitGame = { [weak self] in
             self?.forceExitGame()
@@ -1365,6 +1397,13 @@ class GameViewController: UIViewController {
         })
         alert.addAction(UIAlertAction(title: "👁️ Thêm / Xoá Nút Phím Số (1, 2, 3...)", style: .default) { [weak self] _ in
             self?.showHideKeysDialog()
+        })
+        alert.addAction(UIAlertAction(title: "⌨ Bật Bàn Phím Gốc QWERTY (Gõ Chữ / Chat)", style: .default) { [weak self] _ in
+            self?.nativeKeyboardTapped()
+        })
+        alert.addAction(UIAlertAction(title: "✥ Di Chuyển Phím Bấm (Kéo Thả Tự Do)", style: .default) { [weak self] _ in
+            self?.decadeKeypadView?.toggleEditMode()
+            self?.showToast(message: "Kéo thả các phím để sắp xếp vị trí mong muốn")
         })
         alert.addAction(UIAlertAction(title: "Đóng", style: .cancel))
         if let popover = alert.popoverPresentationController {
@@ -2156,6 +2195,189 @@ class GameViewController: UIViewController {
     }
 
     // ============================================================
+    // MARK: - Native QWERTY Phone Keyboard Bar (like Chơi Game Tuổi Thơ)
+    // ============================================================
+
+    private func setupNativeChatBar() {
+        nativeChatBar.backgroundColor = UIColor(red: 0.10, green: 0.13, blue: 0.19, alpha: 0.98)
+        nativeChatBar.layer.borderColor = UIColor(white: 1.0, alpha: 0.15).cgColor
+        nativeChatBar.layer.borderWidth = 0.5
+        nativeChatBar.translatesAutoresizingMaskIntoConstraints = false
+        nativeChatBar.isHidden = true
+        view.addSubview(nativeChatBar)
+
+        let stack = UIStackView()
+        stack.axis = .horizontal
+        stack.spacing = 8
+        stack.alignment = .center
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        nativeChatBar.addSubview(stack)
+
+        // 1. Paste Button
+        let pasteBtn = UIButton(type: .system)
+        let pasteCfg = UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+        pasteBtn.setImage(UIImage(systemName: "doc.on.clipboard", withConfiguration: pasteCfg), for: .normal)
+        pasteBtn.tintColor = UIColor(white: 0.85, alpha: 1.0)
+        pasteBtn.addTarget(self, action: #selector(pasteToNativeChat), for: .touchUpInside)
+        pasteBtn.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            pasteBtn.widthAnchor.constraint(equalToConstant: 32),
+            pasteBtn.heightAnchor.constraint(equalToConstant: 32)
+        ])
+
+        // 2. Text Field
+        nativeTextField.backgroundColor = UIColor(white: 0.20, alpha: 0.85)
+        nativeTextField.textColor = .white
+        nativeTextField.font = .systemFont(ofSize: 15, weight: .regular)
+        nativeTextField.layer.cornerRadius = 8
+        nativeTextField.layer.masksToBounds = true
+        nativeTextField.placeholder = "Nhập chữ, chat, tài khoản..."
+        nativeTextField.attributedPlaceholder = NSAttributedString(
+            string: "Nhập chữ, chat, tài khoản...",
+            attributes: [.foregroundColor: UIColor(white: 0.60, alpha: 1.0)]
+        )
+        nativeTextField.autocorrectionType = .no
+        nativeTextField.autocapitalizationType = .none
+        nativeTextField.clearButtonMode = .whileEditing
+        nativeTextField.returnKeyType = .send
+        nativeTextField.delegate = self
+        let pad = UIView(frame: CGRect(x: 0, y: 0, width: 10, height: 36))
+        nativeTextField.leftView = pad
+        nativeTextField.leftViewMode = .always
+        nativeTextField.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            nativeTextField.heightAnchor.constraint(equalToConstant: 36)
+        ])
+
+        // 3. Send Button
+        let sendBtn = UIButton(type: .system)
+        sendBtn.setTitle("Gửi ↵", for: .normal)
+        sendBtn.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
+        sendBtn.setTitleColor(.white, for: .normal)
+        sendBtn.backgroundColor = UIColor(red: 0.12, green: 0.50, blue: 0.95, alpha: 1.0)
+        sendBtn.layer.cornerRadius = 8
+        sendBtn.contentEdgeInsets = UIEdgeInsets(top: 6, left: 12, bottom: 6, right: 12)
+        sendBtn.addTarget(self, action: #selector(sendNativeChatText), for: .touchUpInside)
+
+        // 4. Close Button
+        let closeBtn = UIButton(type: .system)
+        let closeCfg = UIImage.SymbolConfiguration(pointSize: 18, weight: .medium)
+        closeBtn.setImage(UIImage(systemName: "xmark.circle.fill", withConfiguration: closeCfg), for: .normal)
+        closeBtn.tintColor = UIColor(white: 0.70, alpha: 1.0)
+        closeBtn.addTarget(self, action: #selector(dismissNativeChat), for: .touchUpInside)
+        closeBtn.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            closeBtn.widthAnchor.constraint(equalToConstant: 32),
+            closeBtn.heightAnchor.constraint(equalToConstant: 32)
+        ])
+
+        stack.addArrangedSubview(pasteBtn)
+        stack.addArrangedSubview(nativeTextField)
+        stack.addArrangedSubview(sendBtn)
+        stack.addArrangedSubview(closeBtn)
+
+        let bottomConstraint = nativeChatBar.bottomAnchor.constraint(equalTo: view.bottomAnchor)
+        self.nativeChatBarBottomConstraint = bottomConstraint
+
+        NSLayoutConstraint.activate([
+            nativeChatBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            nativeChatBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            nativeChatBar.heightAnchor.constraint(equalToConstant: 48),
+            bottomConstraint,
+
+            stack.leadingAnchor.constraint(equalTo: nativeChatBar.leadingAnchor, constant: 10),
+            stack.trailingAnchor.constraint(equalTo: nativeChatBar.trailingAnchor, constant: -10),
+            stack.centerYAnchor.constraint(equalTo: nativeChatBar.centerYAnchor),
+        ])
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardWillShow(_:)),
+            name: UIResponder.keyboardWillShowNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleKeyboardWillHide(_:)),
+            name: UIResponder.keyboardWillHideNotification,
+            object: nil
+        )
+    }
+
+    @objc private func pasteToNativeChat() {
+        if let clip = UIPasteboard.general.string, !clip.isEmpty {
+            let current = nativeTextField.text ?? ""
+            nativeTextField.text = current + clip
+        }
+    }
+
+    @objc private func dismissNativeChat() {
+        nativeTextField.resignFirstResponder()
+        nativeChatBar.isHidden = true
+    }
+
+    @objc private func sendNativeChatText() {
+        let text = nativeTextField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !text.isEmpty {
+            sendTextToMIDlet(text, sendEnter: true)
+            nativeTextField.text = ""
+            showToast(message: "Đã gửi vào game")
+        } else {
+            sendEnterToMIDlet()
+        }
+        nativeTextField.resignFirstResponder()
+    }
+
+    private func sendEnterToMIDlet() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            j2me_input_post_key(Int32(J2ME_INPUT_KEY_PRESSED), -5) // Canvas.FIRE
+            j2me_input_post_key(Int32(J2ME_INPUT_KEY_PRESSED), 10) // '\n'
+            usleep(20000)
+            j2me_input_post_key(Int32(J2ME_INPUT_KEY_RELEASED), 10)
+            j2me_input_post_key(Int32(J2ME_INPUT_KEY_RELEASED), -5)
+        }
+    }
+
+    @objc private func handleKeyboardWillShow(_ notification: Notification) {
+        guard let userInfo = notification.userInfo,
+              let kbFrame = userInfo[UIResponder.keyboardFrameEndUserInfoKey] as? CGRect else { return }
+        let duration = userInfo[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        nativeChatBarBottomConstraint?.constant = -kbFrame.height
+        nativeChatBar.isHidden = false
+        view.bringSubviewToFront(nativeChatBar)
+        UIView.animate(withDuration: duration) {
+            self.view.layoutIfNeeded()
+        }
+    }
+
+    @objc private func handleKeyboardWillHide(_ notification: Notification) {
+        let duration = notification.userInfo?[UIResponder.keyboardAnimationDurationUserInfoKey] as? Double ?? 0.25
+        nativeChatBarBottomConstraint?.constant = 0
+        UIView.animate(withDuration: duration, animations: {
+            self.view.layoutIfNeeded()
+        }) { _ in
+            self.nativeChatBar.isHidden = true
+        }
+    }
+
+    @objc private func nativeKeyboardTapped() {
+        softKeyHaptic.impactOccurred(intensity: 0.7)
+        if nativeTextField.isFirstResponder {
+            nativeTextField.resignFirstResponder()
+            nativeChatBar.isHidden = true
+        } else {
+            nativeChatBar.isHidden = false
+            view.bringSubviewToFront(nativeChatBar)
+            nativeTextField.becomeFirstResponder()
+        }
+    }
+
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        sendNativeChatText()
+        return true
+    }
+
+    // ============================================================
     // MARK: - Quick Text Input Dialog (⌨) on Canvas
     // ============================================================
 
@@ -2440,22 +2662,26 @@ class GameViewController: UIViewController {
         }
     }
 
+    @objc private func backButtonTapped() {
+        backTapped()
+    }
+
     @objc private func backTapped() {
         let alert = UIAlertController(
-            title: "Trạng Thái Game",
-            message: "Bạn muốn tiếp tục treo game chạy nền 24/7 hay thoát game hoàn toàn?",
+            title: "📋 Danh Sách Chọn Game",
+            message: "Bạn muốn quay lại danh sách chọn game như thế nào?",
             preferredStyle: .actionSheet
         )
-        alert.addAction(UIAlertAction(title: "Ẩn & Treo ngầm (Giữ game chạy 24/7)", style: .default) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "🟢 Về Danh Sách & Treo Ngầm (Giữ game 24/7)", style: .default) { [weak self] _ in
             self?.minimizeToLobby()
         })
-        alert.addAction(UIAlertAction(title: "Thoát game hoàn toàn", style: .destructive) { [weak self] _ in
+        alert.addAction(UIAlertAction(title: "🔴 Thoát Game Hoàn Toàn", style: .destructive) { [weak self] _ in
             self?.forceExitGame()
         })
         alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
         if let popover = alert.popoverPresentationController {
-            popover.sourceView = topToolbar
-            popover.sourceRect = CGRect(x: topToolbar.bounds.midX, y: topToolbar.bounds.midY, width: 0, height: 0)
+            popover.sourceView = backToListBtn
+            popover.sourceRect = backToListBtn.bounds
         }
         present(alert, animated: true)
     }

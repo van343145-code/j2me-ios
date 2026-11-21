@@ -15,7 +15,7 @@ extern int g_render_3d_scale;
 // Multi-slot JVM lifecycle
 // ============================================================
 
-/// Initialize a specific slot session (slot 0..15).
+/// Initialize a slot from 0 through JVM_BRIDGE_MAX_SLOTS - 1.
 int jvm_bridge_init_slot(int slot, const char *res_root, const char *save_root, const char *midlet_jar,
                          int screen_width, int screen_height, int render_3d_scale,
                          int fps_limit);
@@ -23,7 +23,7 @@ int jvm_bridge_init_slot(int slot, const char *res_root, const char *save_root, 
 /// Run a MIDlet in a specific slot session via MIDletRunner.
 int jvm_bridge_run_midlet_slot(int slot, const char *midlet_jar_path);
 
-/// Destroy a specific slot session and free its resources.
+/// Free a stopped slot. If it is still initializing or running, request stop first.
 void jvm_bridge_destroy_slot(int slot);
 
 /// Destroy all active slot sessions.

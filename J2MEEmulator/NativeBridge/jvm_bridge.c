@@ -51,6 +51,9 @@ typedef struct {
 
 typedef struct {
     MiniJVM *jvm;
+    void *retiring_jvm;
+    int initializing;
+    int executing;
     atomic_int stop_requested;
     atomic_int is_running;
     char jar_path[1024];
@@ -63,6 +66,7 @@ typedef struct {
 static SlotSessionNative g_slots[JVM_BRIDGE_MAX_SLOTS];
 static atomic_int g_focused_slot = 0;
 static pthread_mutex_t g_slots_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_init_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Server Destination Override ("Thay IP Phiên Bản") */
 static int g_server_override_enabled = 0;
@@ -90,7 +94,7 @@ int jvm_bridge_find_jvm_slot(void *jvm_ptr) {
     if (!jvm_ptr) return -1;
     pthread_mutex_lock(&g_slots_lock);
     for (int i = 0; i < JVM_BRIDGE_MAX_SLOTS; i++) {
-        if (g_slots[i].jvm == jvm_ptr) {
+        if (g_slots[i].jvm == jvm_ptr || g_slots[i].retiring_jvm == jvm_ptr) {
             pthread_mutex_unlock(&g_slots_lock);
             return i;
         }
@@ -104,6 +108,13 @@ int jvm_bridge_get_jvm_slot(void *jvm_ptr) {
     return slot < 0 ? 0 : slot;
 }
 
+static void finish_slot_initialization(int slot) {
+    pthread_mutex_lock(&g_slots_lock);
+    g_slots[slot].initializing = 0;
+    pthread_mutex_unlock(&g_slots_lock);
+    pthread_mutex_unlock(&g_init_lock);
+}
+
 int jvm_bridge_init_slot(int slot, const char *res_root, const char *save_root, const char *midlet_jar,
                          int screen_width, int screen_height, int render_3d_scale,
                          int fps_limit) {
@@ -113,10 +124,20 @@ int jvm_bridge_init_slot(int slot, const char *res_root, const char *save_root, 
     }
 
     pthread_mutex_lock(&g_slots_lock);
-    if (g_slots[slot].jvm) {
-        printf("[JVM Bridge] Slot %d already initialized\n", slot);
+    if (g_slots[slot].jvm || g_slots[slot].initializing || g_slots[slot].retiring_jvm) {
+        printf("[JVM Bridge] Slot %d is in use\n", slot);
         pthread_mutex_unlock(&g_slots_lock);
         return -1;
+    }
+    g_slots[slot].initializing = 1;
+    atomic_store(&g_slots[slot].stop_requested, 0);
+    pthread_mutex_unlock(&g_slots_lock);
+
+    // One JVM initializes at a time without blocking input, rendering or stop requests.
+    pthread_mutex_lock(&g_init_lock);
+    if (jvm_bridge_is_slot_stop_requested(slot)) {
+        finish_slot_initialization(slot);
+        return -4;
     }
 
     char bootclasspath[1024];
@@ -130,7 +151,7 @@ int jvm_bridge_init_slot(int slot, const char *res_root, const char *save_root, 
     MiniJVM *jvm = jvm_create();
     if (!jvm) {
         printf("[JVM Bridge] ERROR: jvm_create() failed for slot %d\n", slot);
-        pthread_mutex_unlock(&g_slots_lock);
+        finish_slot_initialization(slot);
         return -2;
     }
 
@@ -144,7 +165,7 @@ int jvm_bridge_init_slot(int slot, const char *res_root, const char *save_root, 
     if (ret) {
         printf("[JVM Bridge] ERROR: jvm_init() failed for slot %d (code %d)\n", slot, ret);
         jvm_destroy(jvm);
-        pthread_mutex_unlock(&g_slots_lock);
+        finish_slot_initialization(slot);
         return -3;
     }
 
@@ -202,32 +223,46 @@ int jvm_bridge_init_slot(int slot, const char *res_root, const char *save_root, 
         sys_properties_set_c(jvm, "j2me.fps.limit", fl);
     }
 
+    pthread_mutex_lock(&g_slots_lock);
     g_slots[slot].jvm = jvm;
-    atomic_store(&g_slots[slot].stop_requested, 0);
     atomic_store(&g_slots[slot].is_running, 1);
     snprintf(g_slots[slot].jar_path, sizeof(g_slots[slot].jar_path), "%s", midlet_jar);
     snprintf(g_slots[slot].save_root, sizeof(g_slots[slot].save_root), "%s", save_root);
 
     pthread_mutex_unlock(&g_slots_lock);
+    finish_slot_initialization(slot);
     printf("[JVM Bridge] Slot %d JVM initialized successfully\n", slot);
     return 0;
 }
 
 int jvm_bridge_run_midlet_slot(int slot, const char *midlet_jar_path) {
-    if (slot < 0 || slot >= JVM_BRIDGE_MAX_SLOTS || !g_slots[slot].jvm) {
+    if (slot < 0 || slot >= JVM_BRIDGE_MAX_SLOTS) return -1;
+    pthread_mutex_lock(&g_slots_lock);
+    MiniJVM *jvm = g_slots[slot].jvm;
+    if (jvm_bridge_is_slot_stop_requested(slot)) {
+        pthread_mutex_unlock(&g_slots_lock);
+        return 0;
+    }
+    if (!jvm || g_slots[slot].executing) {
+        pthread_mutex_unlock(&g_slots_lock);
         printf("[JVM Bridge] ERROR: Slot %d not ready to run\n", slot);
         return -1;
     }
+    g_slots[slot].executing = 1;
+    pthread_mutex_unlock(&g_slots_lock);
 
     printf("[JVM Bridge] Slot %d executing MIDlet from: %s\n", slot, midlet_jar_path);
 
     ArrayList *java_para = arraylist_create(0);
     arraylist_push_back(java_para, (void *)midlet_jar_path);
 
-    s32 ret = call_main(g_slots[slot].jvm, (c8 *)"javax/microedition/shell/MIDletRunner", java_para);
+    s32 ret = call_main(jvm, (c8 *)"javax/microedition/shell/MIDletRunner", java_para);
     arraylist_destroy(java_para);
 
+    pthread_mutex_lock(&g_slots_lock);
+    g_slots[slot].executing = 0;
     atomic_store(&g_slots[slot].is_running, 0);
+    pthread_mutex_unlock(&g_slots_lock);
     printf("[JVM Bridge] Slot %d MIDlet finished with code %d\n", slot, ret);
     return ret;
 }
@@ -236,11 +271,18 @@ void jvm_bridge_destroy_slot(int slot) {
     if (slot < 0 || slot >= JVM_BRIDGE_MAX_SLOTS) return;
 
     pthread_mutex_lock(&g_slots_lock);
+    if (g_slots[slot].executing || g_slots[slot].initializing) {
+        atomic_store(&g_slots[slot].stop_requested, 1);
+        pthread_mutex_unlock(&g_slots_lock);
+        return;
+    }
     MiniJVM *jvm = g_slots[slot].jvm;
     if (jvm) {
+        // Native callbacks can still arrive while the JVM threads are joining.
+        g_slots[slot].retiring_jvm = jvm;
         g_slots[slot].jvm = NULL;
         atomic_store(&g_slots[slot].is_running, 0);
-        atomic_store(&g_slots[slot].stop_requested, 0);
+        atomic_store(&g_slots[slot].stop_requested, 1);
         pthread_mutex_unlock(&g_slots_lock);
 
         printf("[JVM Bridge] Destroying slot %d JVM\n", slot);
@@ -252,6 +294,9 @@ void jvm_bridge_destroy_slot(int slot) {
         thread_stop_all(jvm);
         jvm_destroy(jvm);
         j2me_ui_reset_slot(slot);
+        pthread_mutex_lock(&g_slots_lock);
+        g_slots[slot].retiring_jvm = NULL;
+        pthread_mutex_unlock(&g_slots_lock);
         return;
     }
     pthread_mutex_unlock(&g_slots_lock);

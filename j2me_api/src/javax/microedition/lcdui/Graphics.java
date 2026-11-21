@@ -47,6 +47,12 @@ public class Graphics {
     void reset(int clipX, int clipY, int clipW, int clipH) {
         this.translateX = 0;
         this.translateY = 0;
+        if (clipW <= 0 || clipH <= 0) {
+            clipX = 0;
+            clipY = 0;
+            clipW = this.canvasWidth;
+            clipH = this.canvasHeight;
+        }
         this.absClipX = clipX;
         this.absClipY = clipY;
         this.clipW = clipW;

@@ -67,8 +67,8 @@ public class Display {
             NativeBridge.showCanvas();
             Canvas canvas = (Canvas) d;
             canvas.initContext();
-            canvas.repaintPending = true;
             canvas.showNotify();
+            canvas.forceFullRepaint();
         } else {
             refresh(d);
         }
@@ -120,6 +120,10 @@ public class Display {
      */
     public static void postEvent(Event event) {
         Display.eventQueue.postEvent(event);
+    }
+
+    public static EventQueue getEventQueue() {
+        return eventQueue;
     }
 
     // --- Display capabilities (MIDP 2.0) ---
@@ -236,21 +240,14 @@ public class Display {
                     // Just woke up or entered foreground: force immediate full repaint!
                     canvas.forceFullRepaint();
                 }
-                if (canvas.repaintPending) {
-                    try {
-                        canvas.doPaint();
-                    } catch (Throwable t) {
-                        System.out.println("[Display] Warning: exception in canvas.doPaint: " + t);
-                    }
-                }
             }
             wasInBackground = inBg;
 
             // Sleep cleanly: 60ms in background (~16 wakeups/sec, eliminates iOS EXC_RESOURCE WAKEUPS kill!)
-            // and 16ms in foreground (~60 FPS responsive).
+            // and 8ms in foreground for smooth, responsive native input polling.
             try {
                 if (!MIDlet.isDestroyRequested()) {
-                    Thread.sleep(inBg ? 60 : 16);
+                    Thread.sleep(inBg ? 60 : 8);
                 }
             } catch (InterruptedException e) {
                 if (NativeBridge.isStopRequested() || MIDlet.isDestroyRequested()) {

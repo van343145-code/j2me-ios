@@ -1,8 +1,11 @@
 package javax.microedition.lcdui;
 
+import javax.microedition.lcdui.event.Event;
+import javax.microedition.lcdui.event.EventFilter;
+
 /**
  * J2ME Canvas — the main class for custom rendering in MIDlets.
- * Uses offscreen CGBitmapContext via NativeBridge for double-buffered rendering.
+ * Implements thread-safe paint and event pipeline matching J2ME-Loader ("Chơi game tuổi thơ").
  */
 public abstract class Canvas extends Displayable {
     // Game action constants
@@ -46,29 +49,133 @@ public abstract class Canvas extends Displayable {
 
     private long nativeContext;
     private Graphics graphics;
-    public volatile boolean repaintPending = true;
     private boolean fullScreen = false;
-    // Dirty rect for partial repaint (J2ME clip region for paint())
-    private int clipX, clipY, clipW, clipH;
-    public volatile boolean fullRepaint = true;
-    // Lock to prevent concurrent doPaint from game thread + Display thread
     private final Object paintLock = new Object();
+    private final PaintEvent paintEvent = new PaintEvent();
 
-    public void forceFullRepaint() {
-        fullRepaint = true;
-        clipX = 0;
-        clipY = 0;
-        clipW = width;
-        clipH = height;
-        repaintPending = true;
+    // Helper Rect class matching J2ME-Loader Rect
+    private static class Rect {
+        int left, top, right, bottom;
+
+        Rect() {}
+        Rect(int l, int t, int r, int b) {
+            left = l; top = t; right = r; bottom = b;
+        }
+
+        void setEmpty() {
+            left = top = right = bottom = 0;
+        }
+
+        boolean isEmpty() {
+            return left >= right || top >= bottom;
+        }
     }
 
-    // FPS limiting (matches J2ME-Loader's Canvas.limitFps)
-    private static int fpsLimit = 30;
+    /**
+     * PaintEvent implements Event and EventFilter, exactly matching J2ME-Loader.
+     * All repaints and dirty rect accumulations are serialized on paintEvent.clip.
+     */
+    private class PaintEvent extends Event implements EventFilter {
+        final Rect clip = new Rect();
+        boolean isPending;
+        private int enqueued = 0;
+
+        @Override
+        public synchronized void process() {
+            if (!isShown()) {
+                return;
+            }
+            boolean inBg = false;
+            try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
+            if (inBg) {
+                // Background mode: skip drawing to save CPU & battery
+                synchronized (clip) {
+                    isPending = false;
+                    clip.setEmpty();
+                }
+                return;
+            }
+
+            int l, t, r, b;
+            synchronized (clip) {
+                isPending = false;
+                l = clip.left;
+                t = clip.top;
+                r = clip.right;
+                b = clip.bottom;
+                clip.setEmpty();
+            }
+
+            if (l >= r || t >= b) {
+                return;
+            }
+
+            synchronized (paintLock) {
+                if (nativeContext == 0) initContext();
+                if (graphics == null) return;
+                graphics.reset(l, t, r - l, b - t);
+                try {
+                    paint(graphics);
+                } catch (Throwable e) {
+                    System.out.println("[Canvas] Warning: exception in paint(): " + e);
+                }
+                NativeBridge.flushToScreen(nativeContext);
+            }
+        }
+
+        @Override
+        public void recycle() {
+        }
+
+        @Override
+        public void enterQueue() {
+            enqueued++;
+        }
+
+        @Override
+        public void leaveQueue() {
+            enqueued--;
+        }
+
+        @Override
+        public boolean placeableAfter(Event event) {
+            return event != this;
+        }
+
+        @Override
+        public boolean accept(Event event) {
+            return event == this;
+        }
+
+        private boolean invalidateClip(Canvas canvas, int l, int t, int r, int b) {
+            if (l < 0) l = 0;
+            if (t < 0) t = 0;
+            if (r > canvas.width) r = canvas.width;
+            if (b > canvas.height) b = canvas.height;
+            if (l >= r || t >= b) return false;
+
+            boolean empty = clip.left >= clip.right || clip.top >= clip.bottom;
+            if (empty) {
+                clip.left = l;
+                clip.top = t;
+                clip.right = r;
+                clip.bottom = b;
+            } else {
+                if (clip.left > l) clip.left = l;
+                if (clip.top > t) clip.top = t;
+                if (clip.right < r) clip.right = r;
+                if (clip.bottom < b) clip.bottom = b;
+            }
+            return clip.left < clip.right && clip.top < clip.bottom;
+        }
+    }
+
+    // FPS limiting (matches J2ME-Loader Canvas.limitFps)
+    private static int fpsLimit = 60;
     private long lastFrameTime = System.currentTimeMillis();
 
     public static void setLimitFps(int fps) {
-        Canvas.fpsLimit = fps > 0 ? fps : 30;
+        Canvas.fpsLimit = fps > 0 ? fps : 60;
     }
 
     public static int getLimitFps() {
@@ -76,23 +183,12 @@ public abstract class Canvas extends Displayable {
     }
 
     private void limitFps() {
-        boolean inBg = false;
-        try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
-        if (inBg) {
-            try {
-                long millis = 50L - (System.currentTimeMillis() - lastFrameTime);
-                if (millis > 0) Thread.sleep(millis);
-            } catch (InterruptedException ignored) {}
-            lastFrameTime = System.currentTimeMillis();
-            return;
-        }
-        if (fpsLimit > 0) {
-            try {
-                long millis = (1000L / fpsLimit) - (System.currentTimeMillis() - lastFrameTime);
-                if (millis > 0) Thread.sleep(millis);
-            } catch (InterruptedException ignored) {}
-            lastFrameTime = System.currentTimeMillis();
-        }
+        if (fpsLimit <= 0) return;
+        try {
+            long millis = (1000L / fpsLimit) - (System.currentTimeMillis() - lastFrameTime);
+            if (millis > 0) Thread.sleep(millis);
+        } catch (InterruptedException ignored) {}
+        lastFrameTime = System.currentTimeMillis();
     }
 
     /**
@@ -113,35 +209,33 @@ public abstract class Canvas extends Displayable {
         try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
         if (inBg) {
             long now = System.currentTimeMillis();
-            if (now - lastFrameTime < 450L) {
-                return;
+            if (now - lastFrameTime < 450L) return;
+        }
+        limitFps();
+        boolean post;
+        synchronized (paintEvent.clip) {
+            post = paintEvent.invalidateClip(this, x, y, x + w, y + h) && !paintEvent.isPending;
+            if (post) {
+                paintEvent.isPending = true;
             }
         }
-        if (!repaintPending) {
-            // First repaint request — set clip to this rect
-            clipX = x;
-            clipY = y;
-            clipW = w;
-            clipH = h;
-            fullRepaint = (x == 0 && y == 0 && w >= width && h >= height);
-        } else {
-            // Accumulate: union of dirty rects
-            int newRight = Math.max(clipX + clipW, x + w);
-            int newBottom = Math.max(clipY + clipH, y + h);
-            clipX = Math.min(clipX, x);
-            clipY = Math.min(clipY, y);
-            clipW = newRight - clipX;
-            clipH = newBottom - clipY;
-            if (clipX <= 0 && clipY <= 0 && clipW >= width && clipH >= height) {
-                fullRepaint = true;
-            }
+        if (post) {
+            Display.postEvent(paintEvent);
         }
-        repaintPending = true;
+    }
+
+    public void forceFullRepaint() {
+        if (!isShown()) return;
+        synchronized (paintEvent.clip) {
+            paintEvent.invalidateClip(this, 0, 0, width, height);
+            paintEvent.isPending = true;
+        }
+        Display.postEvent(paintEvent);
     }
 
     /**
      * Process all pending repaints synchronously.
-     * Blocks until paint() completes, using EventQueue's callbackLock
+     * Blocks until paint() completes using EventQueue's callbackLock
      * to ensure serialized access (matching J2ME-Loader behavior).
      */
     public void serviceRepaints() {
@@ -149,21 +243,10 @@ public abstract class Canvas extends Displayable {
         boolean inBg = false;
         try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
         if (inBg) {
-            // Khi tắt màn hình hoặc chạy nền: Triệt tiêu hoàn toàn serviceRepaints()!
-            // Chuẩn cơ chế Chơi Game Tuổi Thơ: if (Midp.sleeping()) return;
-            // Luồng logic game (bot, đánh quái, nhặt đồ, mạng) vẫn chạy 100%,
-            // nhưng 0% CPU bị đốt cho việc vẽ hình ảnh.
             return;
         }
-        if (repaintPending) {
-            doPaint();
-        }
+        Display.getEventQueue().serviceRepaints(paintEvent);
     }
-
-    // TODO: Use EventQueue.serviceRepaints() for proper blocking when
-    // called from a non-event thread. Current implementation is synchronous
-    // which works for most J2ME games that call serviceRepaints() from
-    // their game loop thread.
 
     public void setFullScreenMode(boolean mode) {
         this.fullScreen = mode;
@@ -192,15 +275,15 @@ public abstract class Canvas extends Displayable {
         }
         boolean inBg = false;
         try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
-        if (inBg) {
-            // Khi tắt màn hình / chạy nền, bỏ qua hoàn toàn việc flush lên GPU
-            return;
-        }
+        if (inBg) return;
+        limitFps();
         synchronized (paintLock) {
             if (nativeContext == 0) initContext();
-            graphics.reset(0, 0, this.width, this.height);
-            graphics.drawImage(image, 0, 0, Graphics.LEFT | Graphics.TOP);
-            NativeBridge.flushToScreen(nativeContext);
+            if (graphics != null) {
+                graphics.reset(0, 0, this.width, this.height);
+                graphics.drawImage(image, 0, 0, Graphics.LEFT | Graphics.TOP);
+                NativeBridge.flushToScreen(nativeContext);
+            }
         }
     }
 
@@ -209,59 +292,23 @@ public abstract class Canvas extends Displayable {
         if (!isShown()) return;
         boolean inBg = false;
         try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
-        if (inBg) {
-            // Khi tắt màn hình / chạy nền, bỏ qua hoàn toàn việc flush lên GPU
-            return;
-        }
+        if (inBg) return;
+        limitFps();
         synchronized (paintLock) {
             if (nativeContext == 0) initContext();
-            graphics.reset(0, 0, this.width, this.height);
-            graphics.drawImage(image, x, y, Graphics.LEFT | Graphics.TOP);
-            NativeBridge.flushToScreen(nativeContext);
+            if (graphics != null) {
+                graphics.reset(0, 0, this.width, this.height);
+                graphics.drawImage(image, x, y, Graphics.LEFT | Graphics.TOP);
+                NativeBridge.flushToScreen(nativeContext);
+            }
         }
     }
 
     /**
-     * Perform the paint cycle: clear → paint → flush.
-     * Synchronized on paintLock to prevent concurrent CGContext access
-     * from Display event loop thread and game thread.
+     * Compatibility delegation to PaintEvent.process()
      */
     public void doPaint() {
-        if (!isShown()) return;
-        boolean inBg = false;
-        try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
-        if (inBg) {
-            // Khi tắt màn hình / chạy nền: Pacing đúng 450ms (~2 FPS) như Display.class của Chơi Game Tuổi Thơ (450L).
-            // Bỏ qua toàn bộ việc vẽ đồ hoạ CoreGraphics để CPU hạ về < 1%.
-            long now = System.currentTimeMillis();
-            if (now - lastFrameTime < 450L) {
-                repaintPending = false;
-                return;
-            }
-            lastFrameTime = now;
-            repaintPending = false;
-            return;
-        }
-        limitFps();
-        synchronized (paintLock) {
-            try {
-                if (nativeContext == 0) initContext();
-                repaintPending = false;
-                if (fullRepaint) {
-                    graphics.reset(0, 0, width, height);
-                } else {
-                    graphics.reset(clipX, clipY, clipW, clipH);
-                }
-                paint(graphics);
-                NativeBridge.flushToScreen(nativeContext);
-            } catch (Throwable t) {
-                System.out.println("[Canvas] Warning: Exception in paint(): " + t);
-            } finally {
-                // Reset for next frame
-                fullRepaint = true;
-                clipX = 0; clipY = 0; clipW = width; clipH = height;
-            }
-        }
+        paintEvent.process();
     }
 
     void destroyContext() {
@@ -297,7 +344,6 @@ public abstract class Canvas extends Displayable {
     public void doKeyReleased(int keyCode) { postKeyReleased(keyCode); }
     public void doKeyRepeated(int keyCode) { postKeyRepeated(keyCode); }
 
-    // Overridden by GameCanvas for suppressCommands logic
     public void postKeyPressed(int keyCode) { keyPressed(keyCode); }
     public void postKeyReleased(int keyCode) { keyReleased(keyCode); }
     public void postKeyRepeated(int keyCode) { keyRepeated(keyCode); }

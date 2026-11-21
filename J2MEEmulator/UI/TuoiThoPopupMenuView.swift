@@ -16,6 +16,8 @@ final class TuoiThoPopupMenuView: UIView {
     var onOpenKeyboardSettings: (() -> Void)?
     var onArrangeKeyboard: (() -> Void)?
     var onToggleKeyboardVisibility: (() -> Void)?
+    var onManageQuickKeys: (() -> Void)?
+    var onToggleSplitView: (() -> Void)?
     var onRestartGame: (() -> Void)?
     var onExitGame: (() -> Void)?
 
@@ -142,6 +144,24 @@ final class TuoiThoPopupMenuView: UIView {
         )
         self.hideKeypadBtn = btnHideKb
         contentStack.addArrangedSubview(btnHideKb)
+
+        // 4b. Quản Lý Phím Nhanh (Bolt icon vàng cam)
+        let btnQuickKeys = makeMenuItem(
+            iconName: "bolt.fill",
+            iconColor: UIColor(red: 0.95, green: 0.65, blue: 0.10, alpha: 1.0), // Amber #FFB300
+            title: "⚡ Quản Lý Phím Nhanh",
+            action: #selector(handleManageQuickKeys)
+        )
+        contentStack.addArrangedSubview(btnQuickKeys)
+
+        // 4c. Chia Màn Hình / Split View (Rectangle split icon xanh dương)
+        let btnSplit = makeMenuItem(
+            iconName: "rectangle.split.2x1.fill",
+            iconColor: UIColor(red: 0.12, green: 0.45, blue: 0.88, alpha: 1.0), // Blue #1976D2
+            title: "⧉ Chia Màn Hình (Split)",
+            action: #selector(handleToggleSplitView)
+        )
+        contentStack.addArrangedSubview(btnSplit)
 
         // 5. Khởi Động Lại (Refresh icon tím)
         let btnRestart = makeMenuItem(
@@ -277,6 +297,18 @@ final class TuoiThoPopupMenuView: UIView {
     @objc private func handleToggleHideKb() {
         dismissMenu { [weak self] in
             self?.onToggleKeyboardVisibility?()
+        }
+    }
+
+    @objc private func handleManageQuickKeys() {
+        dismissMenu { [weak self] in
+            self?.onManageQuickKeys?()
+        }
+    }
+
+    @objc private func handleToggleSplitView() {
+        dismissMenu { [weak self] in
+            self?.onToggleSplitView?()
         }
     }
 

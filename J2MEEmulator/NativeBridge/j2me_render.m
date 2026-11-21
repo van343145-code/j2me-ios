@@ -452,13 +452,24 @@ static s32 n_flushToScreen(Runtime *runtime, JClass *clazz) {
         return RUNTIME_STATUS_NORMAL;
     }
 
+    int slot = jvm_bridge_find_jvm_slot(runtime->jvm);
+    if (slot < 0 || jvm_bridge_is_slot_stop_requested(slot)) {
+        return RUNTIME_STATUS_NORMAL;
+    }
+    if (!g_slot_flush_callback && slot != jvm_bridge_get_focused_slot()) {
+        return RUNTIME_STATUS_NORMAL;
+    }
+
     @autoreleasepool {
         JniEnv *env = runtime->jnienv;
         s64 handle = env->localvar_getLong_2slot(runtime->localvar, 0);
         RenderContext *rc = rc_acquire(handle);
         if (rc && (g_flush_callback || g_slot_flush_callback)) {
             CGImageRef image = CGBitmapContextCreateImage(rc->ctx);
-            int slot = jvm_bridge_get_jvm_slot(runtime->jvm);
+            if (!image) {
+                rc_release(rc);
+                return RUNTIME_STATUS_NORMAL;
+            }
 
             if (g_slot_flush_callback) {
                 CFRetain(image);

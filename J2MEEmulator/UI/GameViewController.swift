@@ -36,46 +36,74 @@ class GameViewController: UIViewController {
     let layoutMode: GameLayoutMode
 
     static var currentActiveGameVC: GameViewController?
-    static var slotFrames: [Int: CGImage] = [:]
-    static let slotFrameLock = NSLock()
+    // Native frame callbacks and the main UI share this cache under the same lock.
+    nonisolated(unsafe) static var slotFrames: [Int: CGImage] = [:]
+    nonisolated static let slotFrameLock = NSLock()
+    nonisolated(unsafe) private static var frameDispatchPending = false
 
     static var activeTabCount: Int {
         guard let vc = activeGameViewController else { return 1 }
         return max(1, vc.tabButtons.count)
     }
 
-    static func updateSlotFrame(slot: Int, image: CGImage) {
+    nonisolated static func updateSlotFrame(slot: Int, image: CGImage) {
         slotFrameLock.lock()
         slotFrames[slot] = image
+        if frameDispatchPending {
+            slotFrameLock.unlock()
+            return
+        }
+        frameDispatchPending = true
         slotFrameLock.unlock()
 
         DispatchQueue.main.async {
-            guard let vc = activeGameViewController,
-                  vc.activeSlot == slot else { return }
+            let vc = activeGameViewController
+            slotFrameLock.lock()
+            frameDispatchPending = false
+            let frame = vc.flatMap { slotFrames[$0.activeSlot] }
+            let slot0Frame = vc.flatMap { vc in vc.tabSessions.count > 0 ? slotFrames[vc.tabSessions[0].slotIndex] : nil }
+            let slot1Frame = vc.flatMap { vc in vc.tabSessions.count > 1 ? slotFrames[vc.tabSessions[1].slotIndex] : nil }
+            slotFrameLock.unlock()
+            guard let vc = vc, !vc.isShuttingDown else { return }
             if UIApplication.shared.applicationState == .active {
                 vc.isAppInBackground = false
             }
             if vc.isAppInBackground {
-                if DecadePiPManager.shared.isPiPActive {
-                    DecadePiPManager.shared.updateFrame(image)
+                if let frame = frame, DecadePiPManager.shared.isPiPActive {
+                    DecadePiPManager.shared.updateFrame(frame)
                 }
                 return
             }
-            vc.emulatorView.layer.contents = image
-            if DecadePiPManager.shared.isPiPActive {
-                DecadePiPManager.shared.updateFrame(image)
+
+            if vc.isSplitViewEnabled && vc.tabSessions.count >= 2 {
+                if let f0 = slot0Frame {
+                    vc.splitView1.layer.contents = f0
+                }
+                if let f1 = slot1Frame {
+                    vc.splitView2.layer.contents = f1
+                }
+            } else if let frame = frame {
+                vc.emulatorView.layer.contents = frame
             }
-            DecadeMiniWindow.shared.updateFrame(image)
+
+            if let frame = frame {
+                if DecadePiPManager.shared.isPiPActive {
+                    DecadePiPManager.shared.updateFrame(frame)
+                }
+                DecadeMiniWindow.shared.updateFrame(frame)
+            }
             if let icon = vc.placeholderIconView, icon.alpha > 0 {
                 UIView.animate(withDuration: 0.15) { icon.alpha = 0 }
             }
         }
     }
 
-    static func purgeInactiveSlotFrames() {
+    nonisolated static func purgeInactiveSlotFrames() {
         let activeIdx = Int(jvm_bridge_get_focused_slot())
         slotFrameLock.lock()
-        let keysToDrop = slotFrames.keys.filter { $0 != activeIdx }
+        let keysToDrop = slotFrames.keys.filter { k in
+            k != activeIdx && k != 0 && k != 1
+        }
         for k in keysToDrop {
             slotFrames.removeValue(forKey: k)
         }
@@ -120,17 +148,22 @@ class GameViewController: UIViewController {
     private let tabStrip = UIStackView()
     struct TabSession {
         let slotIndex: Int
-        var jarPath: String
-        var appName: String
-        var gameId: String
-        var saveRoot: String
-        var icon: UIImage?
+        let jarPath: String
+        let appName: String
+        let saveRoot: String
+        let icon: UIImage
+        var width: Int
+        var height: Int
+        let renderScale: Int
+        let fps: Int
         var screenshot: UIImage?
     }
     var tabSessions: [TabSession] = []
     var tabButtons: [UIButton] = []
     var activeTabIndex: Int = 0
     private var tabWorkerSlots: Set<Int> = []
+    private var restartingSlots: Set<Int> = []
+    private var cleanupStarted = false
     private var activeSlot: Int {
         tabSessions.indices.contains(activeTabIndex) ? tabSessions[activeTabIndex].slotIndex : 0
     }
@@ -139,10 +172,25 @@ class GameViewController: UIViewController {
     private let floatingShowKeypadBtn = UIButton(type: .system)
 
     // Toolbar action buttons (Camera button removed per user request)
+    private let splitBtn = UIButton(type: .system)
+    private let quickKeysBtn = UIButton(type: .system)
     private let multiTabBtn = UIButton(type: .system)
     private let addTabBtn = UIButton(type: .system)
     private let keyboardBtn = UIButton(type: .system)
     private let menuBtn = UIButton(type: .system)
+
+    // Quick Keys & Split Tab Components
+    let quickKeysOverlay = DecadeQuickKeysOverlayView()
+    var isSplitViewEnabled: Bool = false
+    private let splitContainer = UIView()
+    private let splitView1 = UIImageView()
+    private let splitView2 = UIImageView()
+    private let splitTitle1 = UILabel()
+    private let splitTitle2 = UILabel()
+    private let splitBadge1 = UILabel()
+    private let splitBadge2 = UILabel()
+    private var splitPaneContainer1: UIView?
+    private var splitPaneContainer2: UIView?
 
     // Legacy controls (if in ngage mode)
     private var joystickView: JoystickView?
@@ -175,14 +223,9 @@ class GameViewController: UIViewController {
     required init?(coder: NSCoder) { fatalError() }
 
     deinit {
-        setGlobalEmulatorView(nil)
         alertTimeoutWork?.cancel()
         autoShutdownTimer?.invalidate()
         statsTimer?.invalidate()
-        UIApplication.shared.isIdleTimerDisabled = false
-        GameViewController.slotFrameLock.lock()
-        GameViewController.slotFrames.removeAll()
-        GameViewController.slotFrameLock.unlock()
     }
 
     private var alertTimeoutWork: DispatchWorkItem?
@@ -266,6 +309,11 @@ class GameViewController: UIViewController {
 
         emulatorView.canvasWidth = canvasWidth
         emulatorView.canvasHeight = canvasHeight
+
+        tabSessions = [TabSession(slotIndex: 0, jarPath: jarPath, appName: appName,
+                                  saveRoot: Self.saveRoot(for: jarPath, appName: appName, slot: 0),
+                                  icon: appIcon, width: canvasWidth, height: canvasHeight,
+                                  renderScale: render3dScale, fps: fpsLimit, screenshot: nil)]
 
         switch layoutMode {
         case .decade:
@@ -367,8 +415,8 @@ class GameViewController: UIViewController {
         isAppInBackground = false
         j2me_render_set_background(0)
         j2me_input_post_key(0, 0)
-        if let img = GameViewController.slotFrames[self.activeSlot] {
-            self.emulatorView.displayImage(img)
+        if let frame = cachedFrame(for: activeSlot) {
+            emulatorView.displayImage(frame)
         }
     }
 
@@ -431,6 +479,16 @@ class GameViewController: UIViewController {
         actionStack.translatesAutoresizingMaskIntoConstraints = false
         topToolbar.addSubview(actionStack)
 
+        // [⧉] Split Tab Button in blue (#1976D2)
+        splitBtn.setImage(UIImage(systemName: "rectangle.split.2x1"), for: .normal)
+        splitBtn.tintColor = UIColor(red: 0.10, green: 0.46, blue: 0.82, alpha: 1.0)
+        splitBtn.addTarget(self, action: #selector(splitTapped), for: .touchUpInside)
+
+        // [⚡] Quick Keys Button in amber (#FFB300)
+        quickKeysBtn.setImage(UIImage(systemName: "bolt.fill"), for: .normal)
+        quickKeysBtn.tintColor = UIColor(red: 0.95, green: 0.65, blue: 0.10, alpha: 1.0)
+        quickKeysBtn.addTarget(self, action: #selector(quickKeysTapped), for: .touchUpInside)
+
         // [+] Button in bold green (#2E7D32)
         addTabBtn.setImage(UIImage(systemName: "plus"), for: .normal)
         addTabBtn.tintColor = UIColor(red: 0.18, green: 0.58, blue: 0.28, alpha: 1.0)
@@ -447,6 +505,8 @@ class GameViewController: UIViewController {
         menuBtn.transform = CGAffineTransform(rotationAngle: .pi / 2) // Rotate to vertical 3 dots!
         menuBtn.addTarget(self, action: #selector(showMenu), for: .touchUpInside)
 
+        actionStack.addArrangedSubview(splitBtn)
+        actionStack.addArrangedSubview(quickKeysBtn)
         actionStack.addArrangedSubview(addTabBtn)
         actionStack.addArrangedSubview(keyboardBtn)
         actionStack.addArrangedSubview(menuBtn)
@@ -506,14 +566,6 @@ class GameViewController: UIViewController {
             tabStrip.heightAnchor.constraint(equalTo: tabScrollView.heightAnchor),
         ])
 
-        // Initialize Tab 1 session
-        let initialGid = appName.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.path
-        let initialSaveRoot = docs + "/Games Data/" + initialGid
-        try? FileManager.default.createDirectory(atPath: initialSaveRoot, withIntermediateDirectories: true)
-        tabSessions = [
-            TabSession(slotIndex: 0, jarPath: jarPath, appName: appName, gameId: initialGid, saveRoot: initialSaveRoot, icon: appIcon, screenshot: nil)
-        ]
         createTabButton(index: 0)
         selectTab(at: 0)
 
@@ -608,10 +660,51 @@ class GameViewController: UIViewController {
             listView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
         ])
 
+        // 6. Split Screen Container (Hidden by default unless split mode is active)
+        splitContainer.translatesAutoresizingMaskIntoConstraints = false
+        splitContainer.backgroundColor = .black
+        splitContainer.isHidden = true
+        view.addSubview(splitContainer)
+
+        let splitStack = UIStackView()
+        splitStack.axis = .vertical
+        splitStack.spacing = 4
+        splitStack.distribution = .fillEqually
+        splitStack.translatesAutoresizingMaskIntoConstraints = false
+        splitContainer.addSubview(splitStack)
+
+        NSLayoutConstraint.activate([
+            splitContainer.topAnchor.constraint(equalTo: tabStripContainer.bottomAnchor),
+            splitContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            splitContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            splitContainer.bottomAnchor.constraint(equalTo: keypad.topAnchor),
+
+            splitStack.topAnchor.constraint(equalTo: splitContainer.topAnchor, constant: 2),
+            splitStack.leadingAnchor.constraint(equalTo: splitContainer.leadingAnchor, constant: 4),
+            splitStack.trailingAnchor.constraint(equalTo: splitContainer.trailingAnchor, constant: -4),
+            splitStack.bottomAnchor.constraint(equalTo: splitContainer.bottomAnchor, constant: -2),
+        ])
+
+        setupSplitPane(pane: splitView1, titleLabel: splitTitle1, badgeLabel: splitBadge1, slotIndex: 0, in: splitStack)
+        setupSplitPane(pane: splitView2, titleLabel: splitTitle2, badgeLabel: splitBadge2, slotIndex: 1, in: splitStack)
+
+        // 7. Quick Keys Floating Overlay
+        quickKeysOverlay.translatesAutoresizingMaskIntoConstraints = false
+        quickKeysOverlay.gameId = currentGameId
+        view.addSubview(quickKeysOverlay)
+        NSLayoutConstraint.activate([
+            quickKeysOverlay.topAnchor.constraint(equalTo: tabStripContainer.bottomAnchor),
+            quickKeysOverlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            quickKeysOverlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            quickKeysOverlay.bottomAnchor.constraint(equalTo: keypad.topAnchor),
+        ])
+
         view.bringSubviewToFront(topToolbar)
         view.bringSubviewToFront(tabStripContainer)
         view.bringSubviewToFront(keypad)
         view.bringSubviewToFront(floatingShowKeypadBtn)
+        view.bringSubviewToFront(quickKeysOverlay)
+        updateTabStripVisibility()
     }
 
     private func styleToolbarButton(_ btn: UIButton, title: String, action: Selector) {
@@ -665,7 +758,7 @@ class GameViewController: UIViewController {
             self?.showProxyPickerForSlot(slot)
         })
 
-        if slot > 0 {
+        if tabSessions.count > 1 {
             sheet.addAction(UIAlertAction(title: "❌ Đóng Tab \(slot + 1)", style: .destructive) { [weak self] _ in
                 self?.closeTab(at: slot)
             })
@@ -684,70 +777,85 @@ class GameViewController: UIViewController {
     }
 
     private func closeTab(at index: Int) {
-        guard index > 0 && tabSessions.indices.contains(index) else { return }
+        guard tabSessions.indices.contains(index), !isShuttingDown else { return }
+        guard tabSessions.count > 1 else {
+            forceExitGame()
+            return
+        }
         let slot = tabSessions[index].slotIndex
-        let previousSlot = activeSlot
-        if slot == previousSlot {
-            view.endEditing(true)
-            dismissNativeAlert()
-        }
+        restartingSlots.remove(slot)
         jvm_bridge_request_stop_slot(Int32(slot))
-
-        let btn = tabButtons[index]
-        btn.removeFromSuperview()
-        tabButtons.remove(at: index)
-        if index < tabSessions.count {
-            tabSessions.remove(at: index)
-        }
-
-        GameViewController.slotFrameLock.lock()
-        GameViewController.slotFrames.removeValue(forKey: slot)
-        GameViewController.slotFrameLock.unlock()
-
-        for (i, b) in tabButtons.enumerated() {
-            b.tag = i
-            b.setTitle("\(i + 1)", for: .normal)
-        }
-
-        let newActive = tabSessions.firstIndex(where: { $0.slotIndex == previousSlot })
-            ?? min(index, tabButtons.count - 1)
-        activeTabIndex = newActive
-        selectTab(at: newActive)
+        removeTab(at: index)
         showToast(message: "Đã đóng Tab \(index + 1)")
     }
 
-    private func selectTab(at index: Int) {
-        guard index >= 0 && index < tabButtons.count else { return }
+    private func removeTab(at index: Int) {
+        let slot = tabSessions[index].slotIndex
+        let previousSlot = activeSlot
+        if slot == previousSlot {
+            endTabEditing()
+        }
+        tabSessions.remove(at: index)
+        tabButtons.remove(at: index).removeFromSuperview()
+        forgetFrame(for: slot)
+        for (i, button) in tabButtons.enumerated() {
+            button.tag = i
+            button.setTitle("\(i + 1)", for: .normal)
+        }
+        let newActive = tabSessions.firstIndex(where: { $0.slotIndex == previousSlot })
+            ?? min(index, tabSessions.count - 1)
+        activeTabIndex = newActive
+        selectTab(at: newActive)
+        updateTabStripVisibility()
+        if tabSessions.count < 2 && isSplitViewEnabled {
+            disableSplitView()
+        }
+        updateSplitFocusBorders()
+        NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
+    }
 
-        // Capture screenshot and UI state of current tab before switching
-        if activeTabIndex != index && activeTabIndex < tabSessions.count {
-            tabSessions[activeTabIndex].screenshot = takeSnapshot()
-            if !formView.isHidden { formView.syncAllTextFields() }
-            view.endEditing(true)
-            dismissNativeAlert()
+    private func endTabEditing() {
+        if !formView.isHidden { formView.syncAllTextFields() }
+        view.endEditing(true)
+        dismissNativeAlert()
+    }
+
+    private func cachedFrame(for slot: Int) -> CGImage? {
+        Self.slotFrameLock.lock()
+        defer { Self.slotFrameLock.unlock() }
+        return Self.slotFrames[slot]
+    }
+
+    private func forgetFrame(for slot: Int) {
+        Self.slotFrameLock.lock()
+        Self.slotFrames.removeValue(forKey: slot)
+        Self.slotFrameLock.unlock()
+    }
+
+    private func selectTab(at index: Int) {
+        guard tabSessions.indices.contains(index), tabButtons.indices.contains(index), !isShuttingDown else { return }
+
+        if activeTabIndex != index && tabSessions.indices.contains(activeTabIndex) {
+            if !emulatorView.isHidden { tabSessions[activeTabIndex].screenshot = takeSnapshot() }
+            endTabEditing()
         }
 
         activeTabIndex = index
-        let session = (index < tabSessions.count) ? tabSessions[index] : tabSessions.first!
-
-        // Switch focused slot in JVM bridge (switches display rendering & input routing)
+        let session = tabSessions[index]
         jvm_bridge_set_focused_slot(Int32(session.slotIndex))
 
-        // Dynamically update save root for data isolation (-tabN)
-        session.saveRoot.withCString { cstr in
-            jvm_bridge_set_save_root(cstr)
-        }
-
-        // Update top bar title & current session info
         titleLabel.text = session.appName
         appName = session.appName
         jarPath = session.jarPath
-        DecadeFloatingBubble.shared.setGameInfo(name: session.appName, icon: appIcon, tabNumber: index + 1)
+        appIcon = session.icon
+        canvasWidth = session.width
+        canvasHeight = session.height
+        emulatorView.canvasWidth = session.width
+        emulatorView.canvasHeight = session.height
+        emulatorView.isAspectFit = !isForceFullscreenEnabled && isAspectFitEnabled
+        DecadeFloatingBubble.shared.setGameInfo(name: session.appName, icon: session.icon, tabNumber: index + 1)
         DecadeMiniWindow.shared.setTabInfo(tabNumber: index + 1)
-        if let icon = session.icon {
-            appIcon = icon
-        }
-        DecadePiPManager.shared.setGameInfo(name: session.appName, icon: appIcon, tabNumber: index + 1)
+        DecadePiPManager.shared.setGameInfo(name: session.appName, icon: session.icon, tabNumber: index + 1)
 
         for (i, btn) in tabButtons.enumerated() {
             if i == index {
@@ -763,17 +871,23 @@ class GameViewController: UIViewController {
         let targetBtn = tabButtons[index]
         tabScrollView.scrollRectToVisible(targetBtn.frame, animated: true)
 
-        decadeKeypadView?.isHidden = isKeypadHidden
-        floatingShowKeypadBtn.isHidden = isForceFullscreenEnabled || !isKeypadHidden
+        if let keypad = decadeKeypadView {
+            keypad.gameId = currentGameId
+            let defaults = UserDefaults.standard
+            let savedLayout = defaults.object(forKey: "keypad_layout_\(currentGameId)") as? Int
+                ?? defaults.object(forKey: "keypad_layout_\(legacyGameId)") as? Int ?? 0
+            keypad.currentLayout = DecadeKeypadLayout(rawValue: savedLayout) ?? .tuoitho
+            isKeypadHidden = defaults.bool(forKey: "keypad_hidden_\(currentGameId)")
+            let hidden = isForceFullscreenEnabled || isKeypadHidden
+            keypad.isHidden = hidden
+            floatingShowKeypadBtn.isHidden = isForceFullscreenEnabled || !isKeypadHidden
+            keypadHeightConstraint?.constant = hidden ? 0 : keypadCurrentHeight
+        }
 
         j2me_ui_restore_focused_screen()
         if !emulatorView.isHidden {
             // Immediately isolate and show this tab's frame!
-            GameViewController.slotFrameLock.lock()
-            let cachedFrame = GameViewController.slotFrames[session.slotIndex]
-            GameViewController.slotFrameLock.unlock()
-
-            if let frame = cachedFrame {
+            if let frame = cachedFrame(for: session.slotIndex) {
                 emulatorView.displayImage(frame)
                 placeholderIconView?.alpha = 0
             } else if let shot = session.screenshot?.cgImage {
@@ -787,91 +901,98 @@ class GameViewController: UIViewController {
             }
         }
 
+        quickKeysOverlay.gameId = currentGameId
+        quickKeysOverlay.isHidden = UserDefaults.standard.bool(forKey: "quick_keys_hidden_\(currentGameId)")
+        updateTabStripVisibility()
+        updateSplitFocusBorders()
+
         showToast(message: "Chuyển sang Tab \(index + 1): \(session.appName)")
     }
 
-    private func addNewTab(jarPath: String, appName: String, icon: UIImage) {
-        let usedSlots = Set(tabSessions.map { $0.slotIndex }).union(tabWorkerSlots)
-        guard let newSlot = (0..<32).first(where: { !usedSlots.contains($0) }) else {
-            showToast(message: "Đã đạt tối đa 32 tab")
-            return
+    var isShuttingDown: Bool { isUserInitiatedExit }
+    var runningGameCount: Int { isShuttingDown ? 0 : Set(tabSessions.map { $0.jarPath }).count }
+
+    func hasGameTab(path: String) -> Bool {
+        !isShuttingDown && tabSessions.contains { $0.jarPath == path }
+    }
+
+    func stopGameTabs(path: String) {
+        for index in tabSessions.indices.reversed() where tabSessions[index].jarPath == path {
+            closeTab(at: index)
         }
+    }
 
-        let gid = appName.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.path
-
-        // Data isolation logic:
-        // If this game was already opened in any previous tab, or slot > 0, isolate into -tab(N)
-        let sameGameCount = tabSessions.filter { $0.gameId == gid }.count
-        let saveRoot: String
-        if sameGameCount == 0 && newSlot == 0 {
-            saveRoot = docs + "/Games Data/" + gid
-        } else {
-            saveRoot = docs + "/Games Data/" + gid + "-tab\(newSlot + 1)"
+    func showGameTab(app: AppsListViewController.AppInfo, width: Int, height: Int,
+                     scale: Int, fps: Int) -> Bool {
+        guard !isShuttingDown else { return false }
+        if let index = tabSessions.firstIndex(where: { $0.jarPath == app.path }) {
+            if jarPath != app.path { selectTab(at: index) }
+            return true
         }
-        try? FileManager.default.createDirectory(atPath: saveRoot, withIntermediateDirectories: true)
+        return addTabs(path: app.path, name: app.name, icon: app.icon,
+                       size: (width, height), scale: scale, fps: fps, count: 1)
+    }
 
-        let session = TabSession(
-            slotIndex: newSlot,
-            jarPath: jarPath,
-            appName: appName,
-            gameId: gid,
-            saveRoot: saveRoot,
-            icon: icon,
-            screenshot: nil
-        )
-        let tabIndex = tabSessions.count
-        tabSessions.append(session)
-        createTabButton(index: tabIndex)
+    private var availableSlots: [Int] {
+        let reserved = Set(tabSessions.map { $0.slotIndex }).union(tabWorkerSlots)
+        return (0..<Int(JVM_BRIDGE_MAX_SLOTS)).filter { !reserved.contains($0) }
+    }
 
-        if newSlot == 0 {
-            selectTab(at: 0)
-        } else {
-            tabWorkerSlots.insert(newSlot)
-            // Real Multi-Tab Execution: Launch independent MiniJVM instance for newSlot!
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                guard let self = self else { return }
-                defer {
-                    DispatchQueue.main.async { self.tabWorkerSlots.remove(newSlot) }
-                }
-                guard let resRoot = Bundle.main.resourcePath else { return }
-                DecadeProxyManager.shared.syncToNative(appId: appName, slot: newSlot)
-                DecadeChangeIpViewController.syncToNative()
-                let initResult = jvm_bridge_init_slot(
-                    Int32(newSlot),
-                    resRoot,
-                    saveRoot,
-                    jarPath,
-                    Int32(self.canvasWidth),
-                    Int32(self.canvasHeight),
-                    Int32(self.render3dScale),
-                    Int32(self.fpsLimit)
-                )
-                guard initResult == 0 else {
-                    print("[Swift] ERROR: Slot \(newSlot) JVM init failed with code \(initResult)")
-                    return
-                }
-                defer { jvm_bridge_destroy_slot(Int32(newSlot)) }
-                let isOpen = DispatchQueue.main.sync {
-                    self.tabSessions.contains { $0.slotIndex == newSlot }
-                }
-                guard isOpen else { return }
-                print("[Swift] Slot \(newSlot) MiniJVM running midlet: \(jarPath)")
-                let runResult = jvm_bridge_run_midlet_slot(Int32(newSlot), jarPath)
-                print("[Swift] Slot \(newSlot) MiniJVM completed with code \(runResult)")
-            }
+    private static func saveRoot(for path: String, appName: String, slot: Int) -> String {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?.path
+            ?? NSTemporaryDirectory()
+        let jarName = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        let base = slot == 0 ? jarName : appName
+        let game = base.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
+        let name = slot == 0 ? game : "\(game)-tab\(slot + 1)"
+        return docs + "/Games Data/" + name
+    }
 
-            selectTab(at: tabIndex)
+    @discardableResult
+    private func addTabs(path: String, name: String, icon: UIImage, size: (Int, Int),
+                         scale: Int, fps: Int, count: Int) -> Bool {
+        guard layoutMode == .decade, !isShuttingDown else { return false }
+        let slots = availableSlots.prefix(count)
+        guard !slots.isEmpty else {
+            showToast(message: "Đã dùng hết \(JVM_BRIDGE_MAX_SLOTS) slot. Hãy đợi tab đang đóng hoặc đóng bớt tab.")
+            return false
         }
+        var newSessions: [TabSession] = []
+        for slot in slots {
+            let session = TabSession(slotIndex: slot, jarPath: path, appName: name,
+                                     saveRoot: Self.saveRoot(for: path, appName: name, slot: slot),
+                                     icon: icon, width: size.0, height: size.1,
+                                     renderScale: scale, fps: fps, screenshot: nil)
+            createTabButton(index: tabSessions.count)
+            tabSessions.append(session)
+            newSessions.append(session)
+        }
+        selectTab(at: tabSessions.count - 1)
+        for session in newSessions { launchTab(session) }
+        updateTabStripVisibility()
+        updateSplitFocusBorders()
+        showToast(message: "Đã yêu cầu mở \(newSessions.count) tab cho \(name)")
+        NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
+        return true
+    }
 
-        let folderName = URL(fileURLWithPath: saveRoot).lastPathComponent
-        showToast(message: "Đã thêm Tab \(tabIndex + 1): \(appName)\n(Thư mục data: \(folderName))")
+    private func duplicateActiveTab(count: Int) {
+        guard tabSessions.indices.contains(activeTabIndex) else { return }
+        let active = tabSessions[activeTabIndex]
+        addTabs(path: active.jarPath, name: active.appName, icon: active.icon,
+                size: (active.width, active.height), scale: active.renderScale, fps: active.fps, count: count)
+    }
+
+    private func addInstalledGame(_ app: AppsListViewController.AppInfo, count: Int) {
+        addTabs(path: app.path, name: app.name, icon: app.icon,
+                size: AppsListViewController.resolution(for: app),
+                scale: AppsListViewController.is3DSupersampling(for: app) ? 3 : 1,
+                fps: AppsListViewController.fpsLimit(for: app), count: count)
     }
 
     @objc private func addTabTapped() {
-        let maxAvailable = 100 - tabButtons.count
-        if maxAvailable <= 0 {
-            showToast(message: "Đã đạt tối đa 100 tab")
+        guard !availableSlots.isEmpty, !isShuttingDown else {
+            showToast(message: "Hiện chưa còn slot trống để thêm tab.")
             return
         }
 
@@ -885,16 +1006,14 @@ class GameViewController: UIViewController {
 
         // 1. Current game option (Cloning / duplicate)
         alert.addAction(UIAlertAction(title: "⧉ Nhân bản game hiện tại (\(appName))", style: .default) { [weak self] _ in
-            guard let self = self else { return }
-            self.addNewTab(jarPath: self.jarPath, appName: self.appName, icon: self.appIcon)
+            self?.duplicateActiveTab(count: 1)
         })
 
         // 2. Installed games options from lobby / library
         for app in installedApps {
             if app.path != self.jarPath {
                 alert.addAction(UIAlertAction(title: "🎮 " + app.name, style: .default) { [weak self] _ in
-                    guard let self = self else { return }
-                    self.addNewTab(jarPath: app.path, appName: app.name, icon: app.icon)
+                    self?.addInstalledGame(app, count: 1)
                 })
             }
         }
@@ -909,9 +1028,9 @@ class GameViewController: UIViewController {
     }
 
     @objc private func multiTabTapped() {
-        let maxAvailable = 100 - tabButtons.count
-        if maxAvailable <= 0 {
-            showToast(message: "Đã đạt tối đa 100 tab")
+        let maxAvailable = availableSlots.count
+        guard maxAvailable > 0, !isShuttingDown else {
+            showToast(message: "Hiện chưa còn slot trống để thêm tab.")
             return
         }
 
@@ -923,7 +1042,7 @@ class GameViewController: UIViewController {
             preferredStyle: .alert
         )
         alert.addTextField { tf in
-            tf.text = "5"
+            tf.text = "\(min(5, maxAvailable))"
             tf.keyboardType = .numberPad
             tf.placeholder = "Số tab (tối đa \(maxAvailable))"
         }
@@ -931,11 +1050,8 @@ class GameViewController: UIViewController {
         // Action for current game
         alert.addAction(UIAlertAction(title: "⧉ Mở cho: \(appName)", style: .default) { [weak self, weak alert] _ in
             guard let self = self else { return }
-            let count = Int(alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespaces) ?? "") ?? 0
-            let safeCount = max(1, min(count, maxAvailable))
-            for _ in 0..<safeCount {
-                self.addNewTab(jarPath: self.jarPath, appName: self.appName, icon: self.appIcon)
-            }
+            guard let count = self.requestedTabCount(in: alert) else { return }
+            self.duplicateActiveTab(count: count)
         })
 
         // Actions for other installed games
@@ -943,17 +1059,23 @@ class GameViewController: UIViewController {
             if app.path != self.jarPath {
                 alert.addAction(UIAlertAction(title: "🎮 " + app.name, style: .default) { [weak self, weak alert] _ in
                     guard let self = self else { return }
-                    let count = Int(alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespaces) ?? "") ?? 0
-                    let safeCount = max(1, min(count, maxAvailable))
-                    for _ in 0..<safeCount {
-                        self.addNewTab(jarPath: app.path, appName: app.name, icon: app.icon)
-                    }
+                    guard let count = self.requestedTabCount(in: alert) else { return }
+                    self.addInstalledGame(app, count: count)
                 })
             }
         }
 
         alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
         present(alert, animated: true)
+    }
+
+    private func requestedTabCount(in alert: UIAlertController?) -> Int? {
+        let text = alert?.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard let count = Int(text), count > 0, count <= availableSlots.count else {
+            showToast(message: "Nhập số tab hợp lệ theo số slot còn trống.")
+            return nil
+        }
+        return count
     }
 
     func captureScreenshot() -> UIImage? {
@@ -968,6 +1090,168 @@ class GameViewController: UIViewController {
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { _ in
             emulatorView.drawHierarchy(in: emulatorView.bounds, afterScreenUpdates: false)
+        }
+    }
+
+    // ============================================================
+    // MARK: - Multi-Tab & Split-Screen Actions
+    // ============================================================
+
+    private func updateTabStripVisibility() {
+        let shouldShow = tabSessions.count > 1
+        tabStripContainer.isHidden = !shouldShow
+        tabStripHeightConstraint?.constant = shouldShow ? 38 : 0
+        splitBtn.isHidden = !shouldShow
+    }
+
+    @objc private func splitTapped() {
+        toggleSplitView()
+    }
+
+    private func toggleSplitView() {
+        guard tabSessions.count >= 2 else {
+            let alert = UIAlertController(
+                title: "Chia Tab Đa Game",
+                message: "Bạn cần ít nhất 2 tab game đang chạy để chia màn hình. Bạn có muốn nhân bản tab hiện tại không?",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "➕ Nhân bản tab hiện tại", style: .default) { [weak self] _ in
+                self?.duplicateActiveTab(count: 1)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                    self?.enableSplitView()
+                }
+            })
+            alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
+            present(alert, animated: true)
+            return
+        }
+
+        if isSplitViewEnabled {
+            disableSplitView()
+        } else {
+            enableSplitView()
+        }
+    }
+
+    private func enableSplitView() {
+        guard tabSessions.count >= 2 else { return }
+        isSplitViewEnabled = true
+        splitBtn.tintColor = UIColor.systemGreen
+        splitContainer.isHidden = false
+        emulatorView.isHidden = true
+        updateSplitFocusBorders()
+        showToast(message: "Đã bật: Chia màn hình chạy đa game (2 Tab)")
+    }
+
+    private func disableSplitView() {
+        isSplitViewEnabled = false
+        splitBtn.tintColor = UIColor(red: 0.10, green: 0.46, blue: 0.82, alpha: 1.0)
+        splitContainer.isHidden = true
+        emulatorView.isHidden = false
+        if let frame = cachedFrame(for: activeSlot) {
+            emulatorView.displayImage(frame)
+        }
+        showToast(message: "Đã tắt chế độ chia màn hình")
+    }
+
+    private func setupSplitPane(pane: UIImageView, titleLabel: UILabel, badgeLabel: UILabel, slotIndex: Int, in stack: UIStackView) {
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.backgroundColor = UIColor(white: 0.1, alpha: 1.0)
+        container.layer.cornerRadius = 8
+        container.layer.borderWidth = (slotIndex == 0) ? 2.5 : 1.0
+        container.layer.borderColor = (slotIndex == 0) ? UIColor.systemBlue.cgColor : UIColor(white: 0.3, alpha: 0.8).cgColor
+        container.clipsToBounds = true
+
+        pane.translatesAutoresizingMaskIntoConstraints = false
+        pane.contentMode = .scaleAspectFit
+        pane.clipsToBounds = true
+        pane.backgroundColor = .black
+        container.addSubview(pane)
+
+        let header = UIView()
+        header.translatesAutoresizingMaskIntoConstraints = false
+        header.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+        container.addSubview(header)
+
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        titleLabel.font = .systemFont(ofSize: 12, weight: .bold)
+        titleLabel.textColor = .white
+        titleLabel.text = "Tab \(slotIndex + 1)"
+        header.addSubview(titleLabel)
+
+        badgeLabel.translatesAutoresizingMaskIntoConstraints = false
+        badgeLabel.font = .systemFont(ofSize: 10, weight: .semibold)
+        badgeLabel.textColor = (slotIndex == 0) ? UIColor.systemGreen : UIColor.lightGray
+        badgeLabel.text = (slotIndex == 0) ? "⚡ Đang điều khiển" : "Chạm để chọn"
+        header.addSubview(badgeLabel)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: container.topAnchor),
+            header.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            header.heightAnchor.constraint(equalToConstant: 22),
+
+            titleLabel.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 8),
+            titleLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+
+            badgeLabel.trailingAnchor.constraint(equalTo: header.trailingAnchor, constant: -8),
+            badgeLabel.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+
+            pane.topAnchor.constraint(equalTo: header.bottomAnchor),
+            pane.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            pane.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            pane.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
+
+        let tap = UITapGestureRecognizer(target: self, action: (slotIndex == 0) ? #selector(splitPane1Tapped) : #selector(splitPane2Tapped))
+        container.addGestureRecognizer(tap)
+        container.isUserInteractionEnabled = true
+
+        if slotIndex == 0 {
+            splitPaneContainer1 = container
+        } else {
+            splitPaneContainer2 = container
+        }
+        stack.addArrangedSubview(container)
+    }
+
+    @objc private func splitPane1Tapped() {
+        if activeTabIndex != 0 {
+            selectTab(at: 0)
+        }
+    }
+
+    @objc private func splitPane2Tapped() {
+        if activeTabIndex != 1 && tabSessions.count > 1 {
+            selectTab(at: 1)
+        }
+    }
+
+    private func updateSplitFocusBorders() {
+        let isTab0 = (activeTabIndex == 0)
+        splitPaneContainer1?.layer.borderWidth = isTab0 ? 2.5 : 1.0
+        splitPaneContainer1?.layer.borderColor = isTab0 ? UIColor.systemBlue.cgColor : UIColor(white: 0.3, alpha: 0.8).cgColor
+        splitBadge1.textColor = isTab0 ? UIColor.systemGreen : UIColor.lightGray
+        splitBadge1.text = isTab0 ? "⚡ Đang điều khiển" : "Chạm để chọn"
+
+        let isTab1 = (activeTabIndex == 1)
+        splitPaneContainer2?.layer.borderWidth = isTab1 ? 2.5 : 1.0
+        splitPaneContainer2?.layer.borderColor = isTab1 ? UIColor.systemBlue.cgColor : UIColor(white: 0.3, alpha: 0.8).cgColor
+        splitBadge2.textColor = isTab1 ? UIColor.systemGreen : UIColor.lightGray
+        splitBadge2.text = isTab1 ? "⚡ Đang điều khiển" : "Chạm để chọn"
+
+        if tabSessions.count > 0 {
+            splitTitle1.text = "Tab 1: \(tabSessions[0].appName)"
+        }
+        if tabSessions.count > 1 {
+            splitTitle2.text = "Tab 2: \(tabSessions[1].appName)"
+        }
+    }
+
+    @objc private func quickKeysTapped() {
+        DecadeQuickKeysManager.showMainManager(in: self, overlayView: quickKeysOverlay) { [weak self] msg in
+            self?.showToast(message: msg)
         }
     }
 
@@ -998,6 +1282,15 @@ class GameViewController: UIViewController {
         }
         popup.onToggleKeyboardVisibility = { [weak self] in
             self?.toggleKeypadVisibility()
+        }
+        popup.onManageQuickKeys = { [weak self] in
+            guard let self = self else { return }
+            DecadeQuickKeysManager.showMainManager(in: self, overlayView: self.quickKeysOverlay) { msg in
+                self.showToast(message: msg)
+            }
+        }
+        popup.onToggleSplitView = { [weak self] in
+            self?.toggleSplitView()
         }
         popup.onRestartGame = { [weak self] in
             self?.restartGameSession()
@@ -1044,27 +1337,21 @@ class GameViewController: UIViewController {
     }
 
     private func restartGameSession() {
-        showToast(message: "Đang khởi động lại game...")
+        guard !isShuttingDown, tabSessions.indices.contains(activeTabIndex) else { return }
+        let slot = activeSlot
+        guard restartingSlots.insert(slot).inserted else { return }
         let savedW = UserDefaults.standard.object(forKey: "resW_\(currentGameId)") as? Int ?? 0
         let savedH = UserDefaults.standard.object(forKey: "resH_\(currentGameId)") as? Int ?? 0
-        let targetSize = (savedW > 0 && savedH > 0) ? (savedW, savedH) : calculateAutoCanvasSize()
-        self.canvasWidth = targetSize.0
-        self.canvasHeight = targetSize.1
-        self.emulatorView.canvasWidth = targetSize.0
-        self.emulatorView.canvasHeight = targetSize.1
-        let isForceFill = self.isForceFullscreenEnabled || !self.isAspectFitEnabled
-        self.emulatorView.isAspectFit = !isForceFill
-
-        let slot = Int32(self.activeSlot)
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self = self else { return }
-            jvm_bridge_request_stop_slot(slot)
-            Thread.sleep(forTimeInterval: 0.35)
-            jvm_bridge_destroy_slot(slot)
-            Thread.sleep(forTimeInterval: 0.15)
-            DispatchQueue.main.async {
-                self.startGame()
-            }
+        let size = (savedW > 0 && savedH > 0) ? (savedW, savedH) : calculateAutoCanvasSize()
+        tabSessions[activeTabIndex].width = size.0
+        tabSessions[activeTabIndex].height = size.1
+        tabSessions[activeTabIndex].screenshot = nil
+        showToast(message: "Đang khởi động lại tab \(activeTabIndex + 1)…")
+        if tabWorkerSlots.contains(slot) {
+            jvm_bridge_request_stop_slot(Int32(slot))
+        } else {
+            restartingSlots.remove(slot)
+            launchTab(tabSessions[activeTabIndex])
         }
     }
 
@@ -1530,10 +1817,26 @@ class GameViewController: UIViewController {
             self?.promptTextInput()
         }
 
+        let quickKeysItem = UIAction(
+            title: "⚡ Quản lý phím nhanh",
+            image: UIImage(systemName: "bolt.fill")
+        ) { [weak self] _ in
+            self?.quickKeysTapped()
+        }
+
+        let splitTabItem = UIAction(
+            title: isSplitViewEnabled ? "⧉ Tắt chia màn hình" : "⧉ Chia màn hình đa game",
+            image: UIImage(systemName: "rectangle.split.2x1")
+        ) { [weak self] _ in
+            self?.toggleSplitView()
+        }
+
         return UIMenu(
             title: "Bàn phím ảo",
             children: [
                 toggleKeypadItem,
+                quickKeysItem,
+                splitTabItem,
                 editLayoutItem,
                 scaleLayoutItem,
                 finishEditItem,
@@ -1551,6 +1854,17 @@ class GameViewController: UIViewController {
         let hideTitle = isKeypadHidden ? "Bàn phím ảo (Đang tắt)" : "Bàn phím ảo (Đang bật)"
         alert.addAction(UIAlertAction(title: hideTitle, style: .default) { [weak self] _ in
             self?.toggleKeypadVisibility()
+        })
+
+        // 1b. Quản lý phím nhanh
+        alert.addAction(UIAlertAction(title: "⚡ Quản lý phím nhanh", style: .default) { [weak self] _ in
+            self?.quickKeysTapped()
+        })
+
+        // 1c. Chia màn hình đa game
+        let splitTitle = isSplitViewEnabled ? "⧉ Tắt chia màn hình" : "⧉ Chia màn hình đa game"
+        alert.addAction(UIAlertAction(title: splitTitle, style: .default) { [weak self] _ in
+            self?.toggleSplitView()
         })
 
         // 2. Chế độ chỉnh sửa cấu trúc phím
@@ -2025,89 +2339,92 @@ class GameViewController: UIViewController {
     // ============================================================
 
     private func startGame() {
-        guard !hasStartedGame else {
-            isAppInBackground = false
-            j2me_render_set_background(0)
-            j2me_input_post_key(0, 0)
-            return
-        }
+        guard !isShuttingDown, !hasStartedGame, let session = tabSessions.first else { return }
         hasStartedGame = true
-        isUserInitiatedExit = false
         GameViewController.currentActiveGameVC = self
-        NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
-
-        // Tự động kích hoạt chạy nền liên tục chuẩn NowPlaying/MediaPlayback và giữ kết nối không bị ngắt
-        DecadeBackgroundKeeper.shared.updateNowPlayingGame(name: appName)
+        DecadeBackgroundKeeper.shared.updateNowPlayingGame(name: session.appName)
         DecadeBackgroundKeeper.shared.setTreoActive(true)
         UIApplication.shared.isIdleTimerDisabled = true
+        launchTab(session)
+        NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
+    }
 
+    private func launchTab(_ session: TabSession) {
+        let slot = session.slotIndex
+        guard !isShuttingDown, tabWorkerSlots.insert(slot).inserted else { return }
+        forgetFrame(for: slot)
+        if activeSlot == slot {
+            canvasWidth = session.width
+            canvasHeight = session.height
+            emulatorView.canvasWidth = session.width
+            emulatorView.canvasHeight = session.height
+            emulatorView.layer.contents = nil
+            placeholderIconView?.image = session.icon
+            placeholderIconView?.alpha = 1
+        }
+
+        DecadeProxyManager.shared.syncToNative(appId: session.appName, slot: slot)
+        DecadeChangeIpViewController.syncToNative()
+        let path = session.jarPath
+        let saveRoot = session.saveRoot
+        let width = Int32(session.width), height = Int32(session.height)
+        let scale = Int32(session.renderScale), fps = Int32(session.fps)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            self.runMIDlet()
-            DispatchQueue.main.async {
-                if self.isUserInitiatedExit {
-                    if self.presentingViewController != nil {
-                        self.dismiss(animated: true) {
-                            NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
-                        }
-                    } else {
-                        NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
-                    }
-                } else {
-                    // Check if MIDlet actually quit cleanly (user chose "Thoát" in game)
-                    if jvm_bridge_is_slot_running(0) == 0 {
-                        print("[Swift] MIDlet finished cleanly by user in-game exit.")
-                        self.forceExitGame()
-                    } else {
-                        print("[Swift] MIDlet finished unexpectedly while hanging (user did not tap Back)!")
-                        self.handleUnexpectedGameExit()
-                    }
-                }
+            let result = self.runTab(slot: slot, path: path, saveRoot: saveRoot,
+                                     width: width, height: height, scale: scale, fps: fps)
+            DispatchQueue.main.async { self.tabDidFinish(slot: slot, result: result) }
+        }
+    }
+
+    nonisolated private func tabMayRun(slot: Int) -> Bool {
+        DispatchQueue.main.sync {
+            MainActor.assumeIsolated {
+                !self.isShuttingDown && !self.restartingSlots.contains(slot)
+                    && self.tabSessions.contains { $0.slotIndex == slot }
             }
         }
     }
 
-    private func handleUnexpectedGameExit() {
-        guard !isUserInitiatedExit else { return }
-        hasStartedGame = false
-        DecadeBackgroundKeeper.shared.updateNowPlayingGame(name: "\(appName) (Tự kết nối lại...)")
-
-        showToast(message: "🔄 Game đã ngắt kết nối. Đang tự động kết nối lại sau 2 giây...")
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            guard let self = self, !self.isUserInitiatedExit else { return }
-            print("[Swift] Auto-reconnecting / restarting game after unexpected exit...")
-            self.startGame()
+    nonisolated private func runTab(slot index: Int, path: String, saveRoot: String,
+                                    width: Int32, height: Int32, scale: Int32, fps: Int32) -> Int32 {
+        guard tabMayRun(slot: index) else { return 0 }
+        guard let resources = Bundle.main.resourcePath else { return -1 }
+        do {
+            try FileManager.default.createDirectory(atPath: saveRoot, withIntermediateDirectories: true)
+        } catch {
+            print("[Swift] Could not create save directory for slot \(index): \(error)")
+            return -1
         }
+
+        let slot = Int32(index)
+        let initResult = jvm_bridge_init_slot(slot, resources, saveRoot, path, width, height, scale, fps)
+        guard initResult == 0 else { return initResult }
+        defer { jvm_bridge_destroy_slot(slot) }
+        guard tabMayRun(slot: index) else { return 0 }
+        return jvm_bridge_run_midlet_slot(slot, path)
     }
 
-    private func runMIDlet() {
-        guard let resRoot = Bundle.main.resourcePath else { return }
-        let docs = NSSearchPathForDirectoriesInDomains(
-            .documentDirectory, .userDomainMask, true).first ?? NSTemporaryDirectory()
-
-        let jarFileName = URL(fileURLWithPath: jarPath).deletingPathExtension().lastPathComponent
-        let gameId = jarFileName.replacingOccurrences(of: "[^a-zA-Z0-9._-]",
-                                                       with: "_", options: .regularExpression)
-        let saveRoot = docs + "/Games Data/" + gameId
-        try? FileManager.default.createDirectory(atPath: saveRoot, withIntermediateDirectories: true)
-
-        DecadeProxyManager.shared.syncToNative(appId: appName, slot: 0)
-        DecadeChangeIpViewController.syncToNative()
-
-        let initResult = jvm_bridge_init(resRoot, saveRoot, jarPath,
-                                         Int32(canvasWidth),
-                                         Int32(canvasHeight),
-                                         Int32(render3dScale),
-                                         Int32(fpsLimit))
-        guard initResult == 0 else {
-            print("[Swift] ERROR: JVM init failed with code \(initResult)")
+    private func tabDidFinish(slot: Int, result: Int32) {
+        tabWorkerSlots.remove(slot)
+        forgetFrame(for: slot)
+        if isShuttingDown {
+            finishShutdownIfReady()
             return
         }
-
-        let runResult = jvm_bridge_run_midlet(jarPath)
-        print("[Swift] MIDlet run result: \(runResult)")
-        jvm_bridge_destroy_slot(0)
+        let restart = restartingSlots.remove(slot) != nil
+        guard let index = tabSessions.firstIndex(where: { $0.slotIndex == slot }) else { return }
+        if restart {
+            launchTab(tabSessions[index])
+            return
+        }
+        if tabSessions.count == 1 {
+            if result != 0 { print("[Swift] MIDlet slot \(slot) failed: \(result)") }
+            forceExitGame()
+        } else {
+            removeTab(at: index)
+            if result != 0 { showToast(message: "Không chạy được tab \(index + 1) (mã \(result)).") }
+        }
     }
 
     @objc private func backTapped() {
@@ -2138,9 +2455,9 @@ class GameViewController: UIViewController {
     }
 
     func forceExitGame() {
+        guard !isShuttingDown else { return }
         isUserInitiatedExit = true
-        hasStartedGame = false
-        GameViewController.currentActiveGameVC = nil
+        restartingSlots.removeAll()
         backButton.isEnabled = false
         autoShutdownTimer?.invalidate()
         autoShutdownTimer = nil
@@ -2150,33 +2467,25 @@ class GameViewController: UIViewController {
         DecadeBackgroundKeeper.shared.setTreoActive(false)
         DecadeBackgroundKeeper.shared.stopKeepalive()
         UIApplication.shared.isIdleTimerDisabled = false
+        for slot in tabWorkerSlots { jvm_bridge_request_stop_slot(Int32(slot)) }
+        NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
+        if presentingViewController != nil { dismiss(animated: true) }
+        finishShutdownIfReady()
+    }
 
-        // 1. Signal stop to ALL slots
-        jvm_bridge_request_stop_all()
-
-        // 2. Wake up event loop
-        j2me_input_post_key(0, 0)
-
-        // 3. Dismiss UI back to apps list immediately on main thread so it NEVER hangs/freezes!
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
-            if self.presentingViewController != nil {
-                self.dismiss(animated: true) {
-                    DispatchQueue.global(qos: .background).async {
-                        jvm_bridge_destroy_all()
-                        DispatchQueue.main.async {
-                            NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
-                        }
-                    }
-                }
-            } else {
-                DispatchQueue.global(qos: .background).async {
-                    jvm_bridge_destroy_all()
-                    DispatchQueue.main.async {
-                        NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
-                    }
-                }
+    private func finishShutdownIfReady() {
+        guard tabWorkerSlots.isEmpty, !cleanupStarted else { return }
+        cleanupStarted = true
+        DispatchQueue.global(qos: .utility).async {
+            jvm_bridge_destroy_all()
+            DispatchQueue.main.async {
+                Self.slotFrameLock.lock()
+                Self.slotFrames.removeAll()
+                Self.slotFrameLock.unlock()
+                if activeGameViewController === self { activeGameViewController = nil }
+                setGlobalEmulatorView(nil)
+                if Self.currentActiveGameVC === self { Self.currentActiveGameVC = nil }
+                NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
             }
         }
     }

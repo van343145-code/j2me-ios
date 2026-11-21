@@ -387,11 +387,9 @@ class DecadeProxyManager {
     }
 
     func syncAllToNative() {
-        for slot in 0..<16 {
-            let appId = (activeGameViewController != nil && slot < activeGameViewController!.tabSessions.count)
-                ? activeGameViewController!.tabSessions[slot].appName
-                : "Game"
-            syncToNative(appId: appId, slot: slot)
+        let sessions = activeGameViewController?.tabSessions ?? []
+        for session in sessions {
+            syncToNative(appId: session.appName, slot: session.slotIndex)
         }
     }
 

@@ -367,7 +367,7 @@ class AppsListViewController: UIViewController,
     }
 
     @objc private func tabDangChayTapped() {
-        if let runningVC = GameViewController.currentActiveGameVC, jvm_bridge_is_slot_running(0) != 0 {
+        if let runningVC = GameViewController.currentActiveGameVC, !runningVC.isShuttingDown {
             runningVC.modalPresentationStyle = .fullScreen
             present(runningVC, animated: true)
         } else {
@@ -426,15 +426,11 @@ class AppsListViewController: UIViewController,
     private var apps: [AppInfo] = []
 
     func isGameRunning(_ app: AppInfo) -> Bool {
-        guard let runningVC = GameViewController.currentActiveGameVC else { return false }
-        return (runningVC.jarPath == app.path) && (jvm_bridge_is_slot_running(0) != 0)
+        GameViewController.currentActiveGameVC?.hasGameTab(path: app.path) ?? false
     }
 
     var runningCount: Int {
-        if let runningVC = GameViewController.currentActiveGameVC, jvm_bridge_is_slot_running(0) != 0 {
-            return 1
-        }
-        return 0
+        GameViewController.currentActiveGameVC?.runningGameCount ?? 0
     }
 
     @objc private func refreshStatus() {
@@ -616,15 +612,6 @@ class AppsListViewController: UIViewController,
     }
 
     private func didSelectApp(_ app: AppInfo) {
-        if let runningVC = GameViewController.currentActiveGameVC,
-           runningVC.jarPath == app.path,
-           jvm_bridge_is_slot_running(0) != 0 {
-            // Game is currently running: restore UI immediately without restarting!
-            runningVC.modalPresentationStyle = .fullScreen
-            present(runningVC, animated: true)
-            return
-        }
-
         launchGame(app: app)
     }
 
@@ -637,10 +624,8 @@ class AppsListViewController: UIViewController,
                 self?.didSelectApp(app)
             })
             alert.addAction(UIAlertAction(title: "⏹ Thoát Game Này", style: .destructive) { [weak self] _ in
-                if let runningVC = GameViewController.currentActiveGameVC, runningVC.jarPath == app.path {
-                    runningVC.forceExitGame()
-                    self?.refreshStatus()
-                }
+                GameViewController.currentActiveGameVC?.stopGameTabs(path: app.path)
+                self?.refreshStatus()
             })
         } else {
             alert.addAction(UIAlertAction(title: "▶ Bắt Đầu Chơi", style: .default) { [weak self] _ in
@@ -680,6 +665,20 @@ class AppsListViewController: UIViewController,
         let render3dScale = Self.is3DSupersampling(for: app) ? 3 : 1
         let res = (overrideW != nil && overrideH != nil) ? (overrideW!, overrideH!) : Self.resolution(for: app)
         let fps = overrideFps ?? Self.fpsLimit(for: app)
+        if let runningVC = GameViewController.currentActiveGameVC {
+            guard runningVC.showGameTab(app: app, width: res.0, height: res.1, scale: render3dScale, fps: fps) else {
+                let alert = UIAlertController(title: "J2ME-Decade",
+                                              message: runningVC.isShuttingDown ? "Đang đóng các phiên game. Vui lòng đợi."
+                                                  : "Hiện chưa còn slot trống để mở game.",
+                                              preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                present(alert, animated: true)
+                return
+            }
+            runningVC.modalPresentationStyle = .fullScreen
+            present(runningVC, animated: true)
+            return
+        }
         let gameVC = GameViewController(jarPath: app.path, appName: app.name, appIcon: app.icon,
                                          canvasWidth: res.0, canvasHeight: res.1,
                                          render3dScale: render3dScale, fpsLimit: fps)

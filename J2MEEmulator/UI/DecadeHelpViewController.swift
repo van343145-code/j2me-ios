@@ -69,7 +69,7 @@ class DecadeHelpViewController: UIViewController {
 
         stack.addArrangedSubview(makeSectionCard(
             title: "2. Chạy bản mod ghép nhiều tài khoản",
-            content: "• Bản mod ghép (Ninja School Online, MrQuyet, AngelChip...) tự động nhận diện các phiên bản độc lập.\n• Bấm nút [+] trên thanh công cụ trong game để thêm 1 tab mới.\n• Bấm nút [++] để mở nhanh nhiều tab cùng lúc (tối đa 100 tab).\n• Bấm vào các số tab [1], [2], [3]... trên thanh tab để chuyển qua lại giữa các tài khoản."
+            content: "• Bản mod ghép (Ninja School Online, MrQuyet, AngelChip...) tự động nhận diện các phiên bản độc lập.\n• Bấm nút [+] trên thanh công cụ trong game để thêm 1 tab mới.\n• Bấm nút [++] để mở nhiều tab trong số \(JVM_BRIDGE_MAX_SLOTS) slot của ứng dụng.\n• Chạm số tab để đổi màn hình. Các tab khác vẫn chạy trong J2ME-Decade.\n• Nhấn giữ một tab để đóng riêng phiên đó."
         ))
 
         stack.addArrangedSubview(makeSectionCard(

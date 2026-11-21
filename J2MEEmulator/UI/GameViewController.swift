@@ -175,6 +175,7 @@ class GameViewController: UIViewController {
     private let splitBtn = UIButton(type: .system)
     private let quickKeysBtn = UIButton(type: .system)
     private let multiTabBtn = UIButton(type: .system)
+    private let removeTabBtn = UIButton(type: .system)
     private let addTabBtn = UIButton(type: .system)
     private let keyboardBtn = UIButton(type: .system)
     private let menuBtn = UIButton(type: .system)
@@ -440,130 +441,80 @@ class GameViewController: UIViewController {
     // ============================================================
 
     private func setupDecadeLayout() {
-        // 1. Top Toolbar (White background #FFFFFF matching Screenshot 1 & 2)
-        topToolbar.backgroundColor = .white
+        // Background color of main view matches dark navy of the top bar
+        view.backgroundColor = UIColor(red: 0.09, green: 0.11, blue: 0.17, alpha: 1.0)
+
+        // 1. Unified Top Bar (Dark Navy #161D2B matching user reference screenshot)
+        topToolbar.backgroundColor = UIColor(red: 0.09, green: 0.11, blue: 0.17, alpha: 1.0)
         topToolbar.translatesAutoresizingMaskIntoConstraints = false
+        topToolbar.clipsToBounds = true
         view.addSubview(topToolbar)
 
-        // Back button on left (←)
-        backArrowBtn.setImage(UIImage(systemName: "arrow.left"), for: .normal)
-        backArrowBtn.tintColor = UIColor(red: 0.12, green: 0.14, blue: 0.12, alpha: 1.0)
-        backArrowBtn.addTarget(self, action: #selector(backTapped), for: .touchUpInside)
-        backArrowBtn.translatesAutoresizingMaskIntoConstraints = false
-        topToolbar.addSubview(backArrowBtn)
+        // Tab Scroll View on the LEFT side of topToolbar
+        tabScrollView.showsHorizontalScrollIndicator = false
+        tabScrollView.showsVerticalScrollIndicator = false
+        tabScrollView.translatesAutoresizingMaskIntoConstraints = false
+        topToolbar.addSubview(tabScrollView)
 
-        // Title on left ("Thợ Đục Error" / appName) + Subtitle
-        titleLabel.text = appName
-        titleLabel.font = .systemFont(ofSize: 16, weight: .bold)
-        titleLabel.textColor = UIColor(red: 0.10, green: 0.12, blue: 0.10, alpha: 1.0)
+        tabStrip.axis = .horizontal
+        tabStrip.spacing = 2
+        tabStrip.alignment = .fill
+        tabStrip.distribution = .fill
+        tabStrip.translatesAutoresizingMaskIntoConstraints = false
+        tabScrollView.addSubview(tabStrip)
 
-        subtitleLabel.text = "RAM: -- MB • CPU: --%"
-        subtitleLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
-        subtitleLabel.textColor = UIColor(red: 0.18, green: 0.52, blue: 0.28, alpha: 1.0)
-
-        let titleStack = UIStackView(arrangedSubviews: [titleLabel, subtitleLabel])
-        titleStack.axis = .vertical
-        titleStack.spacing = 1
-        titleStack.isUserInteractionEnabled = true
-        let cleanTap = UITapGestureRecognizer(target: self, action: #selector(triggerManualRamCleanup))
-        titleStack.addGestureRecognizer(cleanTap)
-        titleStack.translatesAutoresizingMaskIntoConstraints = false
-        topToolbar.addSubview(titleStack)
-        startSystemStatsMonitor()
-
-        // Toolbar action buttons on right: [+] [⌨] [⋮]
+        // Action Buttons on the RIGHT side of topToolbar: [⋮] [-] [+] [🎮]
         let actionStack = UIStackView()
         actionStack.axis = .horizontal
-        actionStack.spacing = 16
+        actionStack.spacing = 18
         actionStack.alignment = .center
         actionStack.translatesAutoresizingMaskIntoConstraints = false
         topToolbar.addSubview(actionStack)
 
-        // [⧉] Split Tab Button in blue (#1976D2)
-        splitBtn.setImage(UIImage(systemName: "rectangle.split.2x1"), for: .normal)
-        splitBtn.tintColor = UIColor(red: 0.10, green: 0.46, blue: 0.82, alpha: 1.0)
-        splitBtn.addTarget(self, action: #selector(splitTapped), for: .touchUpInside)
-
-        // [⚡] Quick Keys Button in amber (#FFB300)
-        quickKeysBtn.setImage(UIImage(systemName: "bolt.fill"), for: .normal)
-        quickKeysBtn.tintColor = UIColor(red: 0.95, green: 0.65, blue: 0.10, alpha: 1.0)
-        quickKeysBtn.addTarget(self, action: #selector(quickKeysTapped), for: .touchUpInside)
-
-        // [+] Button in bold green (#2E7D32)
-        addTabBtn.setImage(UIImage(systemName: "plus"), for: .normal)
-        addTabBtn.tintColor = UIColor(red: 0.18, green: 0.58, blue: 0.28, alpha: 1.0)
-        addTabBtn.addTarget(self, action: #selector(addTabTapped), for: .touchUpInside)
-
-        // [⌨] Keyboard Button in dark grey (#374151)
-        keyboardBtn.setImage(UIImage(systemName: "keyboard"), for: .normal)
-        keyboardBtn.tintColor = UIColor(red: 0.20, green: 0.25, blue: 0.20, alpha: 1.0)
-        keyboardBtn.addTarget(self, action: #selector(keyboardButtonTapped), for: .touchUpInside)
-
-        // [⋮] Menu Button in dark grey (#374151)
-        menuBtn.setImage(UIImage(systemName: "ellipsis"), for: .normal)
-        menuBtn.tintColor = UIColor(red: 0.20, green: 0.25, blue: 0.20, alpha: 1.0)
+        // [⋮] Menu Button (vertical 3 dots)
+        let menuConfig = UIImage.SymbolConfiguration(pointSize: 17, weight: .bold)
+        menuBtn.setImage(UIImage(systemName: "ellipsis", withConfiguration: menuConfig), for: .normal)
+        menuBtn.tintColor = .white
         menuBtn.transform = CGAffineTransform(rotationAngle: .pi / 2) // Rotate to vertical 3 dots!
         menuBtn.addTarget(self, action: #selector(showMenu), for: .touchUpInside)
 
-        actionStack.addArrangedSubview(splitBtn)
-        actionStack.addArrangedSubview(quickKeysBtn)
+        // [-] Remove Current Tab Button
+        let minusConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .bold)
+        removeTabBtn.setImage(UIImage(systemName: "minus", withConfiguration: minusConfig), for: .normal)
+        removeTabBtn.tintColor = .white
+        removeTabBtn.addTarget(self, action: #selector(removeTabTapped), for: .touchUpInside)
+
+        // [+] Add New Tab Button
+        let plusConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .bold)
+        addTabBtn.setImage(UIImage(systemName: "plus", withConfiguration: plusConfig), for: .normal)
+        addTabBtn.tintColor = .white
+        addTabBtn.addTarget(self, action: #selector(addTabTapped), for: .touchUpInside)
+
+        // [🎮] Game Controller Button (toggle virtual keypad/keyboard)
+        let gamePadConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .medium)
+        keyboardBtn.setImage(UIImage(systemName: "gamecontroller.fill", withConfiguration: gamePadConfig), for: .normal)
+        keyboardBtn.tintColor = UIColor(white: 0.90, alpha: 1.0)
+        keyboardBtn.addTarget(self, action: #selector(toggleKeypadVisibility), for: .touchUpInside)
+
+        actionStack.addArrangedSubview(menuBtn)
+        actionStack.addArrangedSubview(removeTabBtn)
         actionStack.addArrangedSubview(addTabBtn)
         actionStack.addArrangedSubview(keyboardBtn)
-        actionStack.addArrangedSubview(menuBtn)
-
-        // Bottom border for topToolbar
-        let toolbarBorder = UIView()
-        toolbarBorder.backgroundColor = UIColor(white: 0.90, alpha: 1.0)
-        toolbarBorder.translatesAutoresizingMaskIntoConstraints = false
-        topToolbar.addSubview(toolbarBorder)
-
-        // 2. Tab Strip Bar (Hidden by default unless multi-tab)
-        tabStripContainer.backgroundColor = UIColor(red: 0.96, green: 0.96, blue: 0.98, alpha: 1.0)
-        tabStripContainer.isHidden = true
-        tabStripContainer.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(tabStripContainer)
-
-        tabScrollView.showsHorizontalScrollIndicator = false
-        tabScrollView.translatesAutoresizingMaskIntoConstraints = false
-        tabStripContainer.addSubview(tabScrollView)
-
-        tabStrip.axis = .horizontal
-        tabStrip.spacing = 6
-        tabStrip.alignment = .center
-        tabStrip.translatesAutoresizingMaskIntoConstraints = false
-        tabScrollView.addSubview(tabStrip)
-
-        let tabHeightConstraint = tabStripContainer.heightAnchor.constraint(equalToConstant: 0)
-        self.tabStripHeightConstraint = tabHeightConstraint
 
         NSLayoutConstraint.activate([
-            backArrowBtn.leadingAnchor.constraint(equalTo: topToolbar.leadingAnchor, constant: 12),
-            backArrowBtn.centerYAnchor.constraint(equalTo: topToolbar.centerYAnchor),
-            backArrowBtn.widthAnchor.constraint(equalToConstant: 32),
-            backArrowBtn.heightAnchor.constraint(equalToConstant: 32),
+            tabScrollView.leadingAnchor.constraint(equalTo: topToolbar.leadingAnchor),
+            tabScrollView.topAnchor.constraint(equalTo: topToolbar.topAnchor),
+            tabScrollView.bottomAnchor.constraint(equalTo: topToolbar.bottomAnchor),
+            tabScrollView.trailingAnchor.constraint(lessThanOrEqualTo: actionStack.leadingAnchor, constant: -10),
 
-            titleStack.leadingAnchor.constraint(equalTo: backArrowBtn.trailingAnchor, constant: 10),
-            titleStack.centerYAnchor.constraint(equalTo: topToolbar.centerYAnchor),
-            titleStack.trailingAnchor.constraint(lessThanOrEqualTo: actionStack.leadingAnchor, constant: -8),
+            tabStrip.leadingAnchor.constraint(equalTo: tabScrollView.leadingAnchor),
+            tabStrip.trailingAnchor.constraint(equalTo: tabScrollView.trailingAnchor),
+            tabStrip.topAnchor.constraint(equalTo: tabScrollView.topAnchor),
+            tabStrip.bottomAnchor.constraint(equalTo: tabScrollView.bottomAnchor),
+            tabStrip.heightAnchor.constraint(equalTo: topToolbar.heightAnchor),
 
             actionStack.trailingAnchor.constraint(equalTo: topToolbar.trailingAnchor, constant: -14),
             actionStack.centerYAnchor.constraint(equalTo: topToolbar.centerYAnchor),
-
-            toolbarBorder.leadingAnchor.constraint(equalTo: topToolbar.leadingAnchor),
-            toolbarBorder.trailingAnchor.constraint(equalTo: topToolbar.trailingAnchor),
-            toolbarBorder.bottomAnchor.constraint(equalTo: topToolbar.bottomAnchor),
-            toolbarBorder.heightAnchor.constraint(equalToConstant: 0.5),
-
-            tabScrollView.topAnchor.constraint(equalTo: tabStripContainer.topAnchor),
-            tabScrollView.leadingAnchor.constraint(equalTo: tabStripContainer.leadingAnchor, constant: 8),
-            tabScrollView.trailingAnchor.constraint(equalTo: tabStripContainer.trailingAnchor, constant: -8),
-            tabScrollView.bottomAnchor.constraint(equalTo: tabStripContainer.bottomAnchor),
-
-            tabStrip.topAnchor.constraint(equalTo: tabScrollView.topAnchor),
-            tabStrip.leadingAnchor.constraint(equalTo: tabScrollView.leadingAnchor),
-            tabStrip.trailingAnchor.constraint(equalTo: tabScrollView.trailingAnchor),
-            tabStrip.bottomAnchor.constraint(equalTo: tabScrollView.bottomAnchor),
-            tabStrip.heightAnchor.constraint(equalTo: tabScrollView.heightAnchor),
         ])
 
         createTabButton(index: 0)
@@ -587,7 +538,7 @@ class GameViewController: UIViewController {
         self.decadeKeypadView = keypad
         view.addSubview(keypad)
 
-        // Floating unhide keypad button (visible when keypad is hidden)
+        // Floating unhide keypad button (backup when keypad is hidden)
         floatingShowKeypadBtn.setTitle("⌨ Bật phím", for: .normal)
         floatingShowKeypadBtn.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
         floatingShowKeypadBtn.setTitleColor(.white, for: .normal)
@@ -599,7 +550,7 @@ class GameViewController: UIViewController {
         floatingShowKeypadBtn.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(floatingShowKeypadBtn)
 
-        // 4. Game Canvas (fills between tab strip and keypad)
+        // 4. Game Canvas (fills between topToolbar and keypad directly)
         emulatorView.translatesAutoresizingMaskIntoConstraints = false
         emulatorView.backgroundColor = .black
         view.addSubview(emulatorView)
@@ -615,17 +566,11 @@ class GameViewController: UIViewController {
         self.keypadHeightConstraint = heightConstraint
 
         NSLayoutConstraint.activate([
-            // Top Toolbar pinned below Safe Area
+            // Top Bar pinned right below Safe Area
             topToolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
             topToolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             topToolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            topToolbar.heightAnchor.constraint(equalToConstant: 44),
-
-            // Tab Strip right under Top Toolbar
-            tabStripContainer.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
-            tabStripContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tabStripContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tabHeightConstraint,
+            topToolbar.heightAnchor.constraint(equalToConstant: 38),
 
             // Keypad at bottom
             keypad.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -637,24 +582,24 @@ class GameViewController: UIViewController {
             floatingShowKeypadBtn.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -14),
             floatingShowKeypadBtn.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -14),
 
-            // Game Canvas fills between Tab Strip and Keypad
-            emulatorView.topAnchor.constraint(equalTo: tabStripContainer.bottomAnchor),
+            // Game Canvas fills between Top Bar and Keypad directly
+            emulatorView.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
             emulatorView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             emulatorView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             emulatorView.bottomAnchor.constraint(equalTo: keypad.topAnchor),
 
-            // Screen Views fill between Tab Strip and View Bottom
-            textBoxView.topAnchor.constraint(equalTo: tabStripContainer.bottomAnchor),
+            // Screen Views fill between Top Bar and View Bottom
+            textBoxView.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
             textBoxView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             textBoxView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             textBoxView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            formView.topAnchor.constraint(equalTo: tabStripContainer.bottomAnchor),
+            formView.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
             formView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             formView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             formView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
 
-            listView.topAnchor.constraint(equalTo: tabStripContainer.bottomAnchor),
+            listView.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
             listView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             listView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             listView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -674,7 +619,7 @@ class GameViewController: UIViewController {
         splitContainer.addSubview(splitStack)
 
         NSLayoutConstraint.activate([
-            splitContainer.topAnchor.constraint(equalTo: tabStripContainer.bottomAnchor),
+            splitContainer.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
             splitContainer.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             splitContainer.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             splitContainer.bottomAnchor.constraint(equalTo: keypad.topAnchor),
@@ -693,18 +638,16 @@ class GameViewController: UIViewController {
         quickKeysOverlay.gameId = currentGameId
         view.addSubview(quickKeysOverlay)
         NSLayoutConstraint.activate([
-            quickKeysOverlay.topAnchor.constraint(equalTo: tabStripContainer.bottomAnchor),
+            quickKeysOverlay.topAnchor.constraint(equalTo: topToolbar.bottomAnchor),
             quickKeysOverlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             quickKeysOverlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             quickKeysOverlay.bottomAnchor.constraint(equalTo: keypad.topAnchor),
         ])
 
         view.bringSubviewToFront(topToolbar)
-        view.bringSubviewToFront(tabStripContainer)
         view.bringSubviewToFront(keypad)
         view.bringSubviewToFront(floatingShowKeypadBtn)
         view.bringSubviewToFront(quickKeysOverlay)
-        updateTabStripVisibility()
     }
 
     private func styleToolbarButton(_ btn: UIButton, title: String, action: Selector) {
@@ -726,10 +669,11 @@ class GameViewController: UIViewController {
     private func createTabButton(index: Int) {
         let tabBtn = UIButton(type: .custom)
         tabBtn.setTitle("\(index + 1)", for: .normal)
-        tabBtn.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
-        tabBtn.layer.cornerRadius = 4
-        tabBtn.contentEdgeInsets = UIEdgeInsets(top: 4, left: 14, bottom: 4, right: 14)
+        tabBtn.titleLabel?.font = .systemFont(ofSize: 15, weight: .bold)
+        tabBtn.layer.cornerRadius = 0
         tabBtn.tag = index
+        tabBtn.translatesAutoresizingMaskIntoConstraints = false
+        tabBtn.widthAnchor.constraint(equalToConstant: 46).isActive = true
         tabBtn.addTarget(self, action: #selector(tabButtonTapped(_:)), for: .touchUpInside)
 
         let longPress = UILongPressGestureRecognizer(target: self, action: #selector(tabButtonLongPressed(_:)))
@@ -737,6 +681,25 @@ class GameViewController: UIViewController {
 
         tabStrip.addArrangedSubview(tabBtn)
         tabButtons.append(tabBtn)
+    }
+
+    @objc private func removeTabTapped() {
+        if tabSessions.count > 1 {
+            let currentTabNum = activeTabIndex + 1
+            closeTab(at: activeTabIndex)
+            showToast(message: "Đã đóng Tab \(currentTabNum)")
+        } else {
+            let alert = UIAlertController(
+                title: "Thoát Game",
+                message: "Bạn có chắc muốn đóng game [\(appName)] và quay về màn hình chính không?",
+                preferredStyle: .alert
+            )
+            alert.addAction(UIAlertAction(title: "Thoát", style: .destructive) { [weak self] _ in
+                self?.forceExitGame()
+            })
+            alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
+            present(alert, animated: true)
+        }
     }
 
     @objc private func tabButtonTapped(_ sender: UIButton) {
@@ -859,11 +822,11 @@ class GameViewController: UIViewController {
 
         for (i, btn) in tabButtons.enumerated() {
             if i == index {
-                btn.backgroundColor = UIColor(red: 0.12, green: 0.41, blue: 0.82, alpha: 1.0)
+                btn.backgroundColor = UIColor(red: 0.12, green: 0.43, blue: 0.98, alpha: 1.0) // #1E6FFB Vibrant Blue
                 btn.setTitleColor(.white, for: .normal)
             } else {
-                btn.backgroundColor = UIColor(red: 0.16, green: 0.20, blue: 0.27, alpha: 1.0)
-                btn.setTitleColor(UIColor(white: 0.85, alpha: 1.0), for: .normal)
+                btn.backgroundColor = UIColor(red: 0.10, green: 0.13, blue: 0.19, alpha: 1.0) // Dark Navy #1A222E
+                btn.setTitleColor(UIColor(white: 0.70, alpha: 1.0), for: .normal)
             }
         }
 
@@ -999,13 +962,13 @@ class GameViewController: UIViewController {
         let installedApps = AppsListViewController.loadInstalledApps()
 
         let alert = UIAlertController(
-            title: "Thêm Tab Mới",
+            title: "➕ Thêm Tab Game",
             message: "Chọn game để chạy trên Tab \(tabButtons.count + 1):",
             preferredStyle: .actionSheet
         )
 
-        // 1. Current game option (Cloning / duplicate)
-        alert.addAction(UIAlertAction(title: "⧉ Nhân bản game hiện tại (\(appName))", style: .default) { [weak self] _ in
+        // 1. Current game option (Quick add / cloning)
+        alert.addAction(UIAlertAction(title: "▶ Thêm Tab cho [\(appName)] (Tab \(tabButtons.count + 1))", style: .default) { [weak self] _ in
             self?.duplicateActiveTab(count: 1)
         })
 
@@ -1098,10 +1061,8 @@ class GameViewController: UIViewController {
     // ============================================================
 
     private func updateTabStripVisibility() {
-        let shouldShow = tabSessions.count > 1
-        tabStripContainer.isHidden = !shouldShow
-        tabStripHeightConstraint?.constant = shouldShow ? 38 : 0
-        splitBtn.isHidden = !shouldShow
+        tabStripContainer.isHidden = true
+        tabStripHeightConstraint?.constant = 0
     }
 
     @objc private func splitTapped() {
@@ -2441,8 +2402,8 @@ class GameViewController: UIViewController {
         })
         alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
         if let popover = alert.popoverPresentationController {
-            popover.sourceView = backArrowBtn
-            popover.sourceRect = backArrowBtn.bounds
+            popover.sourceView = topToolbar
+            popover.sourceRect = CGRect(x: topToolbar.bounds.midX, y: topToolbar.bounds.midY, width: 0, height: 0)
         }
         present(alert, animated: true)
     }

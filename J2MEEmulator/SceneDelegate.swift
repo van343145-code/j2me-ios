@@ -41,6 +41,20 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window = UIWindow(windowScene: windowScene)
         window?.rootViewController = nav
         window?.makeKeyAndVisible()
+
+        if !connectionOptions.urlContexts.isEmpty {
+            let urls = connectionOptions.urlContexts.map { $0.url }
+            vc.importFiles(from: urls)
+        }
+    }
+
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        let urls = URLContexts.map { $0.url }
+        guard !urls.isEmpty else { return }
+        if let nav = window?.rootViewController as? UINavigationController,
+           let listVC = nav.viewControllers.first as? AppsListViewController {
+            listVC.importFiles(from: urls)
+        }
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {

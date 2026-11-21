@@ -22,6 +22,16 @@ class AppsListViewController: UIViewController,
     private let runningBadgeLabel = UILabel()
     private var lastLayoutWidth: CGFloat = 0
 
+    private struct PendingImportItem {
+        let tempURL: URL
+        let originalFileName: String
+        let meta: JARMetadata?
+        let fileSize: Int64
+    }
+
+    private var pendingImportQueue: [PendingImportItem] = []
+    private var isProcessingImportQueue: Bool = false
+
     /// Directory where imported JARs are stored
     private static var gamesDirectory: String {
         documentsDirectory + "/games"
@@ -784,8 +794,46 @@ class AppsListViewController: UIViewController,
     }
 
     // ============================================================
-    // MARK: - Import JAR
+    // MARK: - Import JAR & Smart Overwrite Manager
     // ============================================================
+
+    func showToast(message: String) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let toast = UILabel()
+            toast.text = "  \(message)  "
+            toast.font = .systemFont(ofSize: 14, weight: .semibold)
+            toast.textColor = .white
+            toast.backgroundColor = UIColor(white: 0.15, alpha: 0.95)
+            toast.textAlignment = .center
+            toast.layer.cornerRadius = 18
+            toast.clipsToBounds = true
+            toast.layer.shadowColor = UIColor.black.cgColor
+            toast.layer.shadowOpacity = 0.25
+            toast.layer.shadowRadius = 4
+            toast.layer.shadowOffset = CGSize(width: 0, height: 2)
+            toast.translatesAutoresizingMaskIntoConstraints = false
+            self.view.addSubview(toast)
+
+            NSLayoutConstraint.activate([
+                toast.centerXAnchor.constraint(equalTo: self.view.centerXAnchor),
+                toast.bottomAnchor.constraint(equalTo: self.view.safeAreaLayoutGuide.bottomAnchor, constant: -70),
+                toast.heightAnchor.constraint(equalToConstant: 38),
+                toast.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
+            ])
+
+            toast.alpha = 0
+            UIView.animate(withDuration: 0.25, animations: {
+                toast.alpha = 1
+            }) { _ in
+                UIView.animate(withDuration: 0.3, delay: 2.2, options: .curveEaseOut, animations: {
+                    toast.alpha = 0
+                }) { _ in
+                    toast.removeFromSuperview()
+                }
+            }
+        }
+    }
 
     @objc private func addAppTapped() {
         var contentTypes: [UTType] = []
@@ -808,48 +856,217 @@ class AppsListViewController: UIViewController,
 
     func documentPicker(_ controller: UIDocumentPickerViewController,
                         didPickDocumentsAt urls: [URL]) {
+        importFiles(from: urls)
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        // Picker cancelled
+    }
+
+    func importFiles(from urls: [URL]) {
         let fm = FileManager.default
         let gamesDir = Self.gamesDirectory
         try? fm.createDirectory(atPath: gamesDir, withIntermediateDirectories: true, attributes: nil)
-        var imported = 0
+
+        var newItems: [PendingImportItem] = []
 
         for url in urls {
             let ext = url.pathExtension.lowercased()
             guard ext == "jar" || ext == "zip" else { continue }
-
-            let destURL = URL(fileURLWithPath: gamesDir)
-                .appendingPathComponent(url.lastPathComponent)
 
             let accessing = url.startAccessingSecurityScopedResource()
             defer {
                 if accessing { url.stopAccessingSecurityScopedResource() }
             }
 
+            let tempName = UUID().uuidString + "_" + url.lastPathComponent
+            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent(tempName)
+
             var coordinatorError: NSError?
             let coordinator = NSFileCoordinator()
             coordinator.coordinate(readingItemAt: url, options: .withoutChanges, error: &coordinatorError) { readURL in
                 do {
-                    try? fm.removeItem(at: destURL)
-                    try fm.copyItem(at: readURL, to: destURL)
-                    imported += 1
+                    try? fm.removeItem(at: tempURL)
+                    try fm.copyItem(at: readURL, to: tempURL)
                 } catch {
                     if let data = try? Data(contentsOf: readURL) {
-                        do {
-                            try data.write(to: destURL, options: .atomic)
-                            imported += 1
-                        } catch {
-                            print("[Swift] Write failed for \(url.lastPathComponent): \(error)")
-                        }
-                    } else {
-                        print("[Swift] Failed to import \(url.lastPathComponent): \(error)")
+                        try? data.write(to: tempURL, options: .atomic)
                     }
                 }
             }
+
+            guard fm.fileExists(atPath: tempURL.path) else { continue }
+            let fSize = (try? fm.attributesOfItem(atPath: tempURL.path)[.size] as? Int64) ?? 0
+            guard fSize > 0 else {
+                try? fm.removeItem(at: tempURL)
+                continue
+            }
+
+            let meta = JARMetadata.read(from: tempURL.path)
+            newItems.append(PendingImportItem(
+                tempURL: tempURL,
+                originalFileName: url.lastPathComponent,
+                meta: meta,
+                fileSize: fSize
+            ))
         }
 
-        if imported > 0 {
-            scanApps()
+        guard !newItems.isEmpty else { return }
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.pendingImportQueue.append(contentsOf: newItems)
+            if !self.isProcessingImportQueue {
+                self.processNextPendingImport()
+            }
         }
+    }
+
+    private func processNextPendingImport() {
+        guard !pendingImportQueue.isEmpty else {
+            isProcessingImportQueue = false
+            scanApps()
+            return
+        }
+
+        isProcessingImportQueue = true
+        let item = pendingImportQueue.removeFirst()
+        let fm = FileManager.default
+        let gamesDir = Self.gamesDirectory
+
+        let newFileName = item.originalFileName
+        let newName = item.meta?.midletName ?? URL(fileURLWithPath: newFileName).deletingPathExtension().lastPathComponent
+        let newClassName = item.meta?.className
+        let newVersion = item.meta?.version ?? "Không rõ"
+        let newVendor = item.meta?.vendor ?? "Không rõ"
+        let newSizeStr = String(format: "%.1f MB", Double(item.fileSize) / (1024.0 * 1024.0))
+
+        // Check for matching game (Direct filename or same MIDlet-Name/Class)
+        var matchedApp: AppInfo? = apps.first { $0.fileName.caseInsensitiveCompare(newFileName) == .orderedSame }
+
+        if matchedApp == nil && !newName.isEmpty {
+            matchedApp = apps.first { app in
+                if app.name.caseInsensitiveCompare(newName) == .orderedSame {
+                    return true
+                }
+                if let newClass = newClassName, !newClass.isEmpty {
+                    if let exMeta = JARMetadata.read(from: app.path), exMeta.className == newClass {
+                        return true
+                    }
+                }
+                return false
+            }
+        }
+
+        let directDestURL = URL(fileURLWithPath: gamesDir).appendingPathComponent(newFileName)
+        if matchedApp == nil && fm.fileExists(atPath: directDestURL.path) {
+            let directMeta = JARMetadata.read(from: directDestURL.path)
+            let directSize = (try? fm.attributesOfItem(atPath: directDestURL.path)[.size] as? Int64) ?? 0
+            matchedApp = AppInfo(
+                name: directMeta?.midletName ?? directDestURL.deletingPathExtension().lastPathComponent,
+                path: directDestURL.path,
+                fileName: newFileName,
+                version: directMeta?.version,
+                vendor: directMeta?.vendor,
+                icon: UIImage(),
+                fileSizeString: String(format: "%.1f MB", Double(directSize) / (1024.0 * 1024.0)),
+                resolutionString: "Theo Form Game"
+            )
+        }
+
+        if let existing = matchedApp {
+            // Hiển thị thông tin so sánh chi tiết và cho phép ghi đè
+            let mDate = (try? fm.attributesOfItem(atPath: existing.path)[.modificationDate] as? Date) ?? Date()
+            let df = DateFormatter()
+            df.dateFormat = "dd/MM/yyyy HH:mm"
+            let dateStr = df.string(from: mDate)
+
+            let isRunning = isGameRunning(existing)
+            let runningWarning = isRunning ? "\n⚠️ Game hiện đang mở trong tab! Hãy thoát game hoặc khởi động lại sau khi ghi đè.\n" : ""
+
+            let msg = """
+Game [\(existing.name)] đã tồn tại trên thiết bị!
+
+📁 BẢN HIỆN TẠI (TRÊN MÁY):
+• Tên: \(existing.name)
+• Tệp: \(existing.fileName)
+• Phiên bản: \(existing.version ?? "Không rõ")
+• Dung lượng: \(existing.fileSizeString)
+• Cập nhật: \(dateStr)
+
+📦 BẢN MỚI (CHUẨN BỊ CÀI):
+• Tên: \(newName)
+• Tệp: \(newFileName)
+• Phiên bản: \(newVersion)
+• Dung lượng: \(newSizeStr)
+• Nhà phát triển: \(newVendor)
+\(runningWarning)
+💡 Ghi đè: Dữ liệu game (RMS, tài khoản, cấu hình) sẽ được giữ nguyên an toàn!
+"""
+
+            let alert = UIAlertController(title: "⚠️ Phát Hiện Game Cùng Mã", message: msg, preferredStyle: .alert)
+
+            alert.addAction(UIAlertAction(title: "🔄 Ghi Đè (Cập Nhật Bản Mới)", style: .destructive) { [weak self] _ in
+                guard let self = self else { return }
+                do {
+                    try? fm.removeItem(atPath: existing.path)
+                    try fm.copyItem(at: item.tempURL, to: URL(fileURLWithPath: existing.path))
+                    try? fm.removeItem(at: item.tempURL)
+                    self.showToast(message: "Đã ghi đè cập nhật [\(existing.name)]!")
+                } catch {
+                    self.showToast(message: "Lỗi ghi đè: \(error.localizedDescription)")
+                }
+                self.processNextPendingImport()
+            })
+
+            alert.addAction(UIAlertAction(title: "➕ Cài Song Song (Giữ Cả 2 Bản)", style: .default) { [weak self] _ in
+                guard let self = self else { return }
+                let uniqueName = self.generateUniqueFileName(baseName: newFileName, inDir: gamesDir)
+                let dest = URL(fileURLWithPath: gamesDir).appendingPathComponent(uniqueName)
+                do {
+                    try fm.copyItem(at: item.tempURL, to: dest)
+                    try? fm.removeItem(at: item.tempURL)
+                    self.showToast(message: "Đã cài đặt bản song song: [\(uniqueName)]!")
+                } catch {
+                    self.showToast(message: "Lỗi cài đặt: \(error.localizedDescription)")
+                }
+                self.processNextPendingImport()
+            })
+
+            alert.addAction(UIAlertAction(title: "❌ Hủy Bỏ (Không Cài)", style: .cancel) { [weak self] _ in
+                try? fm.removeItem(at: item.tempURL)
+                self?.showToast(message: "Đã hủy cài đặt [\(newFileName)].")
+                self?.processNextPendingImport()
+            })
+
+            present(alert, animated: true)
+        } else {
+            // Không trùng: Cài đặt trực tiếp
+            let destURL = URL(fileURLWithPath: gamesDir).appendingPathComponent(newFileName)
+            do {
+                try? fm.removeItem(at: destURL)
+                try fm.copyItem(at: item.tempURL, to: destURL)
+                try? fm.removeItem(at: item.tempURL)
+                self.showToast(message: "Đã cài đặt [\(newName)]!")
+            } catch {
+                print("[Swift] Failed to install \(newFileName): \(error)")
+            }
+            processNextPendingImport()
+        }
+    }
+
+    private func generateUniqueFileName(baseName: String, inDir dir: String) -> String {
+        let fm = FileManager.default
+        let ext = (baseName as NSString).pathExtension
+        let nameWithoutExt = (baseName as NSString).deletingPathExtension
+
+        var counter = 1
+        var candidate = "\(nameWithoutExt)_\(counter).\(ext)"
+        while fm.fileExists(atPath: (dir as NSString).appendingPathComponent(candidate)) {
+            counter += 1
+            candidate = "\(nameWithoutExt)_\(counter).\(ext)"
+        }
+        return candidate
     }
 
     // ============================================================

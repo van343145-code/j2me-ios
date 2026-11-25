@@ -473,7 +473,7 @@ static inline s32 _optimize_inline_getter(JClass *clazz, s32 cfrIdx, Runtime *ru
         _null_throw_exception(stack, runtime);
         return RUNTIME_STATUS_EXCEPTION;
     }
-    if (fi->_this_class->status < CLASS_STATUS_CLINITED) {
+    if (jvm_load_acquire_s8(&fi->_this_class->status) < CLASS_STATUS_CLINITED) {
         class_clinit(fi->_this_class, runtime);
     }
     if (fi->isrefer) {
@@ -524,7 +524,7 @@ static inline s32 _optimize_inline_setter(JClass *clazz, s32 cfrIdx, Runtime *ru
         }
     }
 
-    if (fi->_this_class->status < CLASS_STATUS_CLINITED) {
+    if (jvm_load_acquire_s8(&fi->_this_class->status) < CLASS_STATUS_CLINITED) {
         class_clinit(fi->_this_class, runtime);
     }
     if (fi->isrefer) {
@@ -632,7 +632,7 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
     clazz = method->_this_class;
     runtime->clazz = clazz;
     runtime->method = method;
-    while (clazz->status < CLASS_STATUS_CLINITING) {
+    if (jvm_load_acquire_s8(&clazz->status) < CLASS_STATUS_CLINITED && clazz->clinit_thrd != runtime->thrd_info) {
         class_clinit(clazz, runtime);
     }
 #if _JVM_DEBUG_LOG_LEVEL > 3
@@ -2911,7 +2911,7 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                                     goto label_nosuchfield_throw;
                                 }
                             }
-                            if (fi->_this_class->status < CLASS_STATUS_CLINITED) {
+                            if (jvm_load_acquire_s8(&fi->_this_class->status) < CLASS_STATUS_CLINITED) {
                                 stack->sp = sp;
                                 class_clinit(fi->_this_class, runtime);
                                 sp = stack->sp;
@@ -2967,7 +2967,7 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                                     goto label_nosuchfield_throw;
                                 }
                             }
-                            if (fi->_this_class->status < CLASS_STATUS_CLINITED) {
+                            if (jvm_load_acquire_s8(&fi->_this_class->status) < CLASS_STATUS_CLINITED) {
                                 stack->sp = sp;
                                 class_clinit(fi->_this_class, runtime);
                                 sp = stack->sp;
@@ -3028,7 +3028,7 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                                         goto label_nosuchfield_throw;
                                     }
                                 }
-                                if (fi->_this_class->status < CLASS_STATUS_CLINITED) {
+                                if (jvm_load_acquire_s8(&fi->_this_class->status) < CLASS_STATUS_CLINITED) {
                                     stack->sp = sp;
                                     class_clinit(fi->_this_class, runtime);
                                     sp = stack->sp;
@@ -3103,7 +3103,7 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                                         goto label_nosuchfield_throw;
                                     }
                                 }
-                                if (fi->_this_class->status < CLASS_STATUS_CLINITED) {
+                                if (jvm_load_acquire_s8(&fi->_this_class->status) < CLASS_STATUS_CLINITED) {
                                     stack->sp = sp;
                                     class_clinit(fi->_this_class, runtime);
                                     sp = stack->sp;

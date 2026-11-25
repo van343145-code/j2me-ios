@@ -310,13 +310,54 @@ s32 class_prepar(Instance *loader, JClass *clazz, Runtime *runtime) {
  * @param runtime  runtime
  */
 void class_clinit(JClass *clazz, Runtime *runtime) {
+    if (!clazz || !runtime || !runtime->thrd_info) {
+        return;
+    }
+retry:;
+    s8 st = jvm_load_acquire_s8(&clazz->status);
+    if (st >= CLASS_STATUS_CLINITED) {
+        return;
+    }
+    if (st == CLASS_STATUS_CLINITING) {
+        if (clazz->clinit_thrd == runtime->thrd_info) {
+            return;
+        }
+        while (jvm_load_acquire_s8(&clazz->status) < CLASS_STATUS_CLINITED) {
+            if (clazz->clinit_thrd == runtime->thrd_info) {
+                return;
+            }
+            if (runtime->thrd_info->is_stop) {
+                return;
+            }
+            jthread_sleep(runtime, 1);
+        }
+        return;
+    }
+
     vm_share_lock(runtime->jvm);
     runtime->thrd_info->no_pause++;
-    if (clazz->status < CLASS_STATUS_PREPARED) {
+    st = jvm_load_acquire_s8(&clazz->status);
+    if (st < CLASS_STATUS_PREPARED) {
         class_prepar(clazz->jloader, clazz, runtime);
+        st = jvm_load_acquire_s8(&clazz->status);
     }
-    if (clazz->status < CLASS_STATUS_CLINITING) {
-        clazz->status = CLASS_STATUS_CLINITING;
+    if (st >= CLASS_STATUS_CLINITED) {
+        runtime->thrd_info->no_pause--;
+        vm_share_unlock(runtime->jvm);
+        return;
+    }
+    if (st == CLASS_STATUS_CLINITING) {
+        JavaThreadInfo *owner = clazz->clinit_thrd;
+        runtime->thrd_info->no_pause--;
+        vm_share_unlock(runtime->jvm);
+        if (owner == runtime->thrd_info) {
+            return;
+        }
+        goto retry;
+    }
+    {
+        clazz->clinit_thrd = runtime->thrd_info;
+        jvm_store_release_s8(&clazz->status, CLASS_STATUS_CLINITING);
 
         s32 i, len;
 
@@ -420,9 +461,14 @@ void class_clinit(JClass *clazz, Runtime *runtime) {
             }
         }
 
+        // Release metadata lock & no_pause before executing Java code (<clinit>/superclass)
+        // so GC can pause this thread and spawned helper threads can load classes without deadlock.
+        runtime->thrd_info->no_pause--;
+        vm_share_unlock(runtime->jvm);
+
         //Initialize the base class first
         JClass *superclass = getSuperClass(clazz);
-        if (superclass && superclass->status < CLASS_STATUS_CLINITED) {
+        if (superclass && (jvm_load_acquire_s8(&superclass->status) < CLASS_STATUS_CLINITED && superclass->clinit_thrd != runtime->thrd_info)) {
             class_clinit(superclass, runtime);
         }
 
@@ -449,10 +495,9 @@ void class_clinit(JClass *clazz, Runtime *runtime) {
 #if _JVM_DEBUG_LOG_LEVEL > 2
         //jvm_printf("hold class %s\n", utf8_cstr(clazz->name));
 #endif
-        clazz->status = CLASS_STATUS_CLINITED;
+        clazz->clinit_thrd = NULL;
+        jvm_store_release_s8(&clazz->status, CLASS_STATUS_CLINITED);
     }
-    runtime->thrd_info->no_pause--;
-    vm_share_unlock(runtime->jvm);
 }
 
 
@@ -548,6 +593,9 @@ JClass *getClassByConstantClassRef(JClass *clazz, s32 index, Runtime *runtime) {
     if (!ccf->clazz) {
         Utf8String *clsName = class_get_utf8_string(clazz, ccf->stringIndex);
         ccf->clazz = classes_load_get_with_clinit(clazz->jloader, clsName, runtime);
+    } else if (jvm_load_acquire_s8(&ccf->clazz->status) < CLASS_STATUS_CLINITED
+               && ccf->clazz->clinit_thrd != runtime->thrd_info) {
+        class_clinit(ccf->clazz, runtime);
     }
     return ccf->clazz;
 }

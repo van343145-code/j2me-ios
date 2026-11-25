@@ -598,6 +598,25 @@ enum {
     CLASS_STATUS_CLINITING,
     CLASS_STATUS_CLINITED,
 };
+
+static inline s8 jvm_load_acquire_s8(const volatile s8 *ptr) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_load_n(ptr, __ATOMIC_ACQUIRE);
+#else
+    s8 v = *ptr;
+    MEMORY_BARRIER();
+    return v;
+#endif
+}
+
+static inline void jvm_store_release_s8(volatile s8 *ptr, s8 val) {
+#if defined(__GNUC__) || defined(__clang__)
+    __atomic_store_n(ptr, val, __ATOMIC_RELEASE);
+#else
+    MEMORY_BARRIER();
+    *ptr = val;
+#endif
+}
 //线程
 enum {
     THREAD_STATUS_NEW,
@@ -1133,7 +1152,8 @@ struct _ClassType {
     ArrayList *supers; //cache superclass and interfaces , for checkcast and instanceof
 
     //
-    s8 status;
+    JavaThreadInfo *volatile clinit_thrd;
+    s8 volatile status;
     u8 is_primitive;//primitive data type int/long/short/char/short/byte/float/double
     u8 is_jcloader;//is java classoader
     u8 is_weakref;//

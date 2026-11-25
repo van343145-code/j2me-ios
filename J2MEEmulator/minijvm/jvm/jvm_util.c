@@ -86,8 +86,12 @@ JClass *classes_load_get_without_resolve(Instance *jloader, Utf8String *ustr, Ru
 
 JClass *classes_load_get_with_resolve(Instance *jloader, Utf8String *ustr, Runtime *runtime) {
     JClass *cl = classes_load_get_without_resolve(jloader, ustr, runtime);
-    if (cl && cl->status < CLASS_STATUS_PREPARED) {
-        class_prepar(jloader, cl, runtime);
+    if (cl && jvm_load_acquire_s8(&cl->status) < CLASS_STATUS_PREPARED) {
+        vm_share_lock(runtime->jvm);
+        if (jvm_load_acquire_s8(&cl->status) < CLASS_STATUS_PREPARED) {
+            class_prepar(jloader, cl, runtime);
+        }
+        vm_share_unlock(runtime->jvm);
     }
     return cl;
 }
@@ -101,7 +105,7 @@ JClass *classes_load_get_with_clinit_c(Instance *jloader, c8 const *pclassName, 
 
 JClass *classes_load_get_with_clinit(Instance *jloader, Utf8String *ustr, Runtime *runtime) {
     JClass *cl = classes_load_get_without_resolve(jloader, ustr, runtime);
-    if (cl && cl->status < CLASS_STATUS_CLINITED) {
+    if (cl && jvm_load_acquire_s8(&cl->status) < CLASS_STATUS_CLINITED && cl->clinit_thrd != runtime->thrd_info) {
         class_clinit(cl, runtime);
     }
     return cl;

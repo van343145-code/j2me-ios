@@ -211,6 +211,7 @@ void *_parseCPMethod(JClass *_this, ByteBuf *buf, s32 index) {
 void *_parseCPInterfaceMethod(JClass *_this, ByteBuf *buf, s32 index) {
 
     ConstantInterfaceMethodRef *ptr = jvm_calloc(sizeof(ConstantInterfaceMethodRef));
+    ptr->para_slots = -1;
 
     ptr->item.tag = CONSTANT_INTERFACE_METHOD_REF;
     ptr->item.index = index;
@@ -219,12 +220,12 @@ void *_parseCPInterfaceMethod(JClass *_this, ByteBuf *buf, s32 index) {
     Short2Char s2c;
     s2c.c1 = (u8) bytebuf_read(buf);//short_tmp[0];
     s2c.c0 = (u8) bytebuf_read(buf);//short_tmp[1];
-    ptr->classIndex = s2c.s;
+    ptr->classIndex = s2c.us;
 
     //fread(short_tmp, 2, 1, fp);
     s2c.c1 = (u8) bytebuf_read(buf);//short_tmp[0];
     s2c.c0 = (u8) bytebuf_read(buf);//short_tmp[1];
-    ptr->nameAndTypeIndex = s2c.s;
+    ptr->nameAndTypeIndex = s2c.us;
 
     arraylist_push_back(_this->constantPool.interfaceMethodRef, ptr);
     return ptr;
@@ -240,11 +241,11 @@ void *_parseCPNameAndType(JClass *_this, ByteBuf *buf, s32 index) {
     Short2Char s2c;
     s2c.c1 = (u8) bytebuf_read(buf);//short_tmp[0];
     s2c.c0 = (u8) bytebuf_read(buf);//short_tmp[1];
-    ptr->nameIndex = s2c.s;
+    ptr->nameIndex = s2c.us;
 
     s2c.c1 = (u8) bytebuf_read(buf);//short_tmp[0];
     s2c.c0 = (u8) bytebuf_read(buf);//short_tmp[1];
-    ptr->typeIndex = s2c.s;
+    ptr->typeIndex = s2c.us;
 
     return ptr;
 }
@@ -252,7 +253,7 @@ void *_parseCPNameAndType(JClass *_this, ByteBuf *buf, s32 index) {
 
 void *_parseCPMethodType(JClass *_this, ByteBuf *buf, s32 index) {
 
-    ConstantMethodType *ptr = jvm_calloc(sizeof(ConstantNameAndType));
+    ConstantMethodType *ptr = jvm_calloc(sizeof(ConstantMethodType));
 
     ptr->item.tag = CONSTANT_METHOD_TYPE;
     ptr->item.index = index;
@@ -260,7 +261,7 @@ void *_parseCPMethodType(JClass *_this, ByteBuf *buf, s32 index) {
     Short2Char s2c;
     s2c.c1 = (u8) bytebuf_read(buf);//short_tmp[0];
     s2c.c0 = (u8) bytebuf_read(buf);//short_tmp[1];
-    ptr->descriptor_index = s2c.s;
+    ptr->descriptor_index = s2c.us;
 
 
     return ptr;
@@ -269,7 +270,7 @@ void *_parseCPMethodType(JClass *_this, ByteBuf *buf, s32 index) {
 
 void *_parseCPMethodHandle(JClass *_this, ByteBuf *buf, s32 index) {
 
-    ConstantMethodHandle *ptr = jvm_calloc(sizeof(ConstantNameAndType));
+    ConstantMethodHandle *ptr = jvm_calloc(sizeof(ConstantMethodHandle));
 
     ptr->item.tag = CONSTANT_METHOD_HANDLE;
     ptr->item.index = index;
@@ -279,7 +280,7 @@ void *_parseCPMethodHandle(JClass *_this, ByteBuf *buf, s32 index) {
     Short2Char s2c;
     s2c.c1 = (u8) bytebuf_read(buf);//short_tmp[0];
     s2c.c0 = (u8) bytebuf_read(buf);//short_tmp[1];
-    ptr->reference_index = s2c.s;
+    ptr->reference_index = s2c.us;
 
     return ptr;
 }
@@ -287,7 +288,7 @@ void *_parseCPMethodHandle(JClass *_this, ByteBuf *buf, s32 index) {
 
 void *_parseCPInvokeDynamic(JClass *_this, ByteBuf *buf, s32 index) {
 
-    ConstantInvokeDynamic *ptr = jvm_calloc(sizeof(ConstantNameAndType));
+    ConstantInvokeDynamic *ptr = jvm_calloc(sizeof(ConstantInvokeDynamic));
 
     ptr->item.tag = CONSTANT_INVOKE_DYNAMIC;
     ptr->item.index = index;
@@ -295,11 +296,45 @@ void *_parseCPInvokeDynamic(JClass *_this, ByteBuf *buf, s32 index) {
     Short2Char s2c;
     s2c.c1 = (u8) bytebuf_read(buf);//short_tmp[0];
     s2c.c0 = (u8) bytebuf_read(buf);//short_tmp[1];
-    ptr->bootstrap_method_attr_index = s2c.s;
+    ptr->bootstrap_method_attr_index = s2c.us;
 
     s2c.c1 = (u8) bytebuf_read(buf);//short_tmp[0];
     s2c.c0 = (u8) bytebuf_read(buf);//short_tmp[1];
-    ptr->nameAndTypeIndex = s2c.s;
+    ptr->nameAndTypeIndex = s2c.us;
+
+    return ptr;
+}
+
+void *_parseCPDynamic(JClass *_this, ByteBuf *buf, s32 index) {
+
+    ConstantDynamic *ptr = jvm_calloc(sizeof(ConstantDynamic));
+
+    ptr->item.tag = CONSTANT_DYNAMIC;
+    ptr->item.index = index;
+
+    Short2Char s2c;
+    s2c.c1 = (u8) bytebuf_read(buf);
+    s2c.c0 = (u8) bytebuf_read(buf);
+    ptr->bootstrap_method_attr_index = s2c.us;
+
+    s2c.c1 = (u8) bytebuf_read(buf);
+    s2c.c0 = (u8) bytebuf_read(buf);
+    ptr->nameAndTypeIndex = s2c.us;
+
+    return ptr;
+}
+
+void *_parseCPModuleOrPackage(JClass *_this, ByteBuf *buf, s32 index, u8 tag) {
+
+    ConstantModule *ptr = jvm_calloc(sizeof(ConstantModule));
+
+    ptr->item.tag = tag;
+    ptr->item.index = index;
+
+    Short2Char s2c;
+    s2c.c1 = (u8) bytebuf_read(buf);
+    s2c.c0 = (u8) bytebuf_read(buf);
+    ptr->name_index = s2c.us;
 
     return ptr;
 }
@@ -318,7 +353,8 @@ s32 _class_constant_pool_destroy(JClass *clazz) {
                     }
                     break;
                 }
-                case CONSTANT_METHOD_REF: {
+                case CONSTANT_METHOD_REF:
+                case CONSTANT_INTERFACE_METHOD_REF: {
                     ConstantMethodRef *ptr = (ConstantMethodRef *) cptr;
                     if (ptr->virtual_methods) {
                         pairlist_destroy(ptr->virtual_methods);
@@ -703,7 +739,7 @@ s32 _parse_constant_pool(JClass *_this, ByteBuf *buf, s32 count) {
                 ptr = _parseCPMethod(_this, buf, i);
                 break;
             case CONSTANT_INTERFACE_METHOD_REF:
-                ptr = _parseCPMethod(_this, buf, i);//parseCPInterface(_this, fp, i);
+                ptr = _parseCPInterfaceMethod(_this, buf, i);
                 break;
             case CONSTANT_NAME_AND_TYPE:
                 ptr = _parseCPNameAndType(_this, buf, i);
@@ -714,8 +750,15 @@ s32 _parse_constant_pool(JClass *_this, ByteBuf *buf, s32 count) {
             case CONSTANT_METHOD_HANDLE:
                 ptr = _parseCPMethodHandle(_this, buf, i);
                 break;
+            case CONSTANT_DYNAMIC:
+                ptr = _parseCPDynamic(_this, buf, i);
+                break;
             case CONSTANT_INVOKE_DYNAMIC:
                 ptr = _parseCPInvokeDynamic(_this, buf, i);
+                break;
+            case CONSTANT_MODULE:
+            case CONSTANT_PACKAGE:
+                ptr = _parseCPModuleOrPackage(_this, buf, i, tag);
                 break;
             default:
                 jvm_printf("\n!!!unknow constant item tag = %02x!!!\n\n", tag);
@@ -1452,44 +1495,48 @@ s32 _convert_to_code_attribute(CodeAttribute *ca, AttributeInfo *attr, JClass *c
         if (utf8_equals_c(class_get_utf8_string(clazz, attribute_name_index), "LineNumberTable")) {
             s2c.c1 = attr->info[info_p++];
             s2c.c0 = attr->info[info_p++];
-            ca->line_number_table_length = (u16) s2c.s;
-            ca->line_number_table = jvm_calloc(sizeof(u32) * ca->line_number_table_length);
+            ca->line_number_table_length = s2c.us;
+            ca->line_number_table = jvm_calloc(sizeof(LineNumberTable) * ca->line_number_table_length);
             s32 j;
             for (j = 0; j < ca->line_number_table_length; j++) {
                 s2c.c1 = attr->info[info_p++];
                 s2c.c0 = attr->info[info_p++];
                 //setFieldShort(ca->line_number_table[j].start_pc, s2c.s);
-                ca->line_number_table[j].start_pc = s2c.s;
+                ca->line_number_table[j].start_pc = s2c.us;
                 s2c.c1 = attr->info[info_p++];
                 s2c.c0 = attr->info[info_p++];
                 //setFieldShort(ca->line_number_table[j].line_number, s2c.s);
-                ca->line_number_table[j].line_number = s2c.s;
+                ca->line_number_table[j].line_number = s2c.us;
             }
         } else if (utf8_equals_c(class_get_utf8_string(clazz, attribute_name_index), "LocalVariableTable")) {
             s2c.c1 = attr->info[info_p++];
             s2c.c0 = attr->info[info_p++];
-            ca->local_var_table_length = (u16) s2c.s;
+            ca->local_var_table_length = s2c.us;
             ca->local_var_table = jvm_calloc(sizeof(LocalVarTable) * ca->local_var_table_length);
             s32 j;
             for (j = 0; j < ca->local_var_table_length; j++) {
                 s2c.c1 = attr->info[info_p++];
                 s2c.c0 = attr->info[info_p++];
-                ca->local_var_table[j].start_pc = s2c.s;
+                ca->local_var_table[j].start_pc = s2c.us;
                 s2c.c1 = attr->info[info_p++];
                 s2c.c0 = attr->info[info_p++];
-                ca->local_var_table[j].length = s2c.s;
+                ca->local_var_table[j].length = s2c.us;
                 s2c.c1 = attr->info[info_p++];
                 s2c.c0 = attr->info[info_p++];
-                ca->local_var_table[j].name_index = s2c.s;
+                ca->local_var_table[j].name_index = s2c.us;
                 s2c.c1 = attr->info[info_p++];
                 s2c.c0 = attr->info[info_p++];
-                ca->local_var_table[j].descriptor_index = s2c.s;
+                ca->local_var_table[j].descriptor_index = s2c.us;
                 s2c.c1 = attr->info[info_p++];
                 s2c.c0 = attr->info[info_p++];
-                ca->local_var_table[j].index = s2c.s;
+                ca->local_var_table[j].index = s2c.us;
             }
         } else {
-            info_p += attribute_lenth;
+            if (attribute_lenth >= 0 && info_p + attribute_lenth <= attr->attribute_length) {
+                info_p += attribute_lenth;
+            } else {
+                break;
+            }
         }
     }
     return 0;
@@ -1501,7 +1548,7 @@ void _convert_2_bootstrap_methods(AttributeInfo *attr, JClass *clazz) {
     Short2Char s2c;
     s2c.c1 = attr->info[ptr++];
     s2c.c0 = attr->info[ptr++];
-    bms->num_bootstrap_methods = s2c.s;
+    bms->num_bootstrap_methods = s2c.us;
     bms->bootstrap_methods = jvm_calloc(sizeof(BootstrapMethod) * bms->num_bootstrap_methods);
 
     s32 i;
@@ -1509,17 +1556,17 @@ void _convert_2_bootstrap_methods(AttributeInfo *attr, JClass *clazz) {
         BootstrapMethod *bm = &bms->bootstrap_methods[i];
         s2c.c1 = attr->info[ptr++];
         s2c.c0 = attr->info[ptr++];
-        bm->bootstrap_method_ref = s2c.s;
+        bm->bootstrap_method_ref = s2c.us;
 
         s2c.c1 = attr->info[ptr++];
         s2c.c0 = attr->info[ptr++];
-        bm->num_bootstrap_arguments = s2c.s;
+        bm->num_bootstrap_arguments = s2c.us;
         bm->bootstrap_arguments = jvm_calloc(sizeof(u16) * bm->num_bootstrap_arguments);
         s32 j;
         for (j = 0; j < bm->num_bootstrap_arguments; j++) {
             s2c.c1 = attr->info[ptr++];
             s2c.c0 = attr->info[ptr++];
-            bm->bootstrap_arguments[j] = s2c.s;
+            bm->bootstrap_arguments[j] = s2c.us;
         }
 
     }
@@ -1915,12 +1962,15 @@ void _class_optimize(JClass *clazz) {
         }
     }
     for (i = 0; i < clazz->constantPool.interfaceMethodRef->length; i++) {
-        ConstantMethodRef *cmr = (ConstantMethodRef *) arraylist_get_value(clazz->constantPool.methodRef, i);
+        ConstantMethodRef *cmr = (ConstantMethodRef *) arraylist_get_value(clazz->constantPool.interfaceMethodRef, i);
         cmr->nameAndType = class_get_constant_name_and_type(clazz, cmr->nameAndTypeIndex);
-        cmr->name = class_get_utf8_string(clazz, cmr->nameAndType->nameIndex);
-        cmr->descriptor = class_get_utf8_string(clazz, cmr->nameAndType->typeIndex);
-        cmr->clsName = class_get_constant_classref(clazz, cmr->classIndex)->name;
-        if (cmr->para_slots == -1) {
+        if (cmr->nameAndType) {
+            cmr->name = class_get_utf8_string(clazz, cmr->nameAndType->nameIndex);
+            cmr->descriptor = class_get_utf8_string(clazz, cmr->nameAndType->typeIndex);
+        }
+        ConstantClassRef *ccr = class_get_constant_classref(clazz, cmr->classIndex);
+        cmr->clsName = ccr ? ccr->name : NULL;
+        if (cmr->para_slots == -1 && cmr->descriptor) {
             Utf8String *tmps = utf8_create();
             cmr->para_slots = parseMethodPara(cmr->descriptor, tmps);
             utf8_destroy(tmps);
@@ -1936,76 +1986,70 @@ s32 _LOAD_CLASS_FROM_BYTES(JClass *_this, ByteBuf *buf) {
 
     /* magic number */
     bytebuf_read_batch(buf, (c8 *) &cff->magic_number, 4);
-//    fread(cff->magic_number, 4, 1, fp);
+    if (cff->magic_number[0] != 0xCA || cff->magic_number[1] != 0xFE ||
+        cff->magic_number[2] != 0xBA || cff->magic_number[3] != 0xBE) {
+        jvm_printf("invalid classfile magic number\n");
+        return -1;
+    }
 
     /* minor_version */
-    //fread(short_tmp, 2, 1, fp);
     Short2Char s2c;
     s2c.c1 = (c8) bytebuf_read(buf);
     s2c.c0 = (c8) bytebuf_read(buf);
-    cff->minor_version = s2c.s;
+    cff->minor_version = s2c.us;
 
-    /* major_version */
-    //fread(short_tmp, 2, 1, fp);
+    /* major_version (Java 1.0/1.1=45 .. Java 8=52, plus newer metadata safely skipped) */
     s2c.c1 = (c8) bytebuf_read(buf);
     s2c.c0 = (c8) bytebuf_read(buf);
-    cff->major_version = s2c.s;
+    cff->major_version = s2c.us;
 
     /* constant pool */
-    //fread(short_tmp, 2, 1, fp);
     s2c.c1 = (c8) bytebuf_read(buf);
     s2c.c0 = (c8) bytebuf_read(buf);
-    cff->constant_pool_count = s2c.s;
+    cff->constant_pool_count = s2c.us;
     /* constant pool table */
     _parse_constant_pool(_this, buf, cff->constant_pool_count);
     /* access flag */
-    //fread(short_tmp, 2, 1, fp);
     s2c.c1 = (c8) bytebuf_read(buf);
     s2c.c0 = (c8) bytebuf_read(buf);
-    cff->access_flags = s2c.s;
+    cff->access_flags = s2c.us;
 
     /* this class */
-    //fread(short_tmp, 2, 1, fp);
     s2c.c1 = (c8) bytebuf_read(buf);
     s2c.c0 = (c8) bytebuf_read(buf);
-    cff->this_class = s2c.s;
+    cff->this_class = s2c.us;
 
     /* super class */
-    //fread(short_tmp, 2, 1, fp);
     s2c.c1 = (c8) bytebuf_read(buf);
     s2c.c0 = (c8) bytebuf_read(buf);
-    cff->super_class = s2c.s;
+    cff->super_class = s2c.us;
 
     /* interfaceRef count */
-    //fread(short_tmp, 2, 1, fp);
     s2c.c1 = (c8) bytebuf_read(buf);
     s2c.c0 = (c8) bytebuf_read(buf);
-    cff->interface_count = s2c.s;
+    cff->interface_count = s2c.us;
     /* interfaceRef pool table */
     _parse_interface_pool(_this, buf, cff->interface_count);
 
     /* fieldRef count */
-    //fread(short_tmp, 2, 1, fp);
     s2c.c1 = (c8) bytebuf_read(buf);
     s2c.c0 = (c8) bytebuf_read(buf);
-    cff->fields_count = s2c.s;
+    cff->fields_count = s2c.us;
 
     /* fieldRef pool table */
     _parse_field_pool(_this, buf, cff->fields_count);
     /* methodRef count */
-    //fread(short_tmp, 2, 1, fp);
     s2c.c1 = (c8) bytebuf_read(buf);
     s2c.c0 = (c8) bytebuf_read(buf);
-    cff->methods_count = s2c.s;
+    cff->methods_count = s2c.us;
 
     /* methodRef pool table */
     _parse_method_pool(_this, buf, cff->methods_count);
 
     //attribute
-    //fread(short_tmp, 2, 1, fp);
     s2c.c1 = (c8) bytebuf_read(buf);
     s2c.c0 = (c8) bytebuf_read(buf);
-    cff->attributes_count = s2c.s;
+    cff->attributes_count = s2c.us;
     _parse_attribute_pool(_this, buf, cff->attributes_count);
 
     //fclose(fp);

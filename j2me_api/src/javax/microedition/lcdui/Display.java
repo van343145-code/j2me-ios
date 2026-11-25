@@ -239,6 +239,8 @@ public class Display {
                 if (!inBg && wasInBackground) {
                     // Just woke up or entered foreground: force immediate full repaint!
                     canvas.forceFullRepaint();
+                } else if (inBg) {
+                    canvas.flushTrailingRepaintIfNeeded();
                 }
             }
             wasInBackground = inBg;

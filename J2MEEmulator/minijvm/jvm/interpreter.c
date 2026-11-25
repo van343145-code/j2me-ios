@@ -12,7 +12,9 @@
 void _op_notsupport(u8 *opCode, Runtime *runtime) {
     invoke_deepth(runtime);
     jvm_printf("not support instruct [%x]\n", opCode[0]);
-    exit(2);
+    c8 msg[64];
+    snprintf(msg, sizeof(msg), "Unsupported JVM bytecode opcode: 0x%02x", opCode[0]);
+    exception_throw(JVM_EXCEPTION_ILLEGALARGUMENT, runtime, msg);
 }
 
 //----------------------------------  tool func  ------------------------------------------
@@ -163,17 +165,22 @@ s32 invokedynamic_prepare(Runtime *runtime, BootstrapMethod *bootMethod, Constan
     // =====================================================================
     JClass *clazz = runtime->clazz;
     RuntimeStack *stack = runtime->stack;
+    if (!bootMethod || !cid) {
+        _nosuchmethod_check_exception("invokedynamic", stack, runtime);
+        return RUNTIME_STATUS_EXCEPTION;
+    }
 
     //parper bootMethod parameter
     Instance *lookup = method_handles_lookup_create(runtime, clazz);
     push_ref(stack, lookup); //lookup
 
-    Utf8String *ustr_invokeName = class_get_constant_utf8(clazz, class_get_constant_name_and_type(clazz, cid->nameAndTypeIndex)->nameIndex)->utfstr;
-    Instance *jstr_invokeName = jstring_create(ustr_invokeName, runtime);
+    ConstantNameAndType *nat = class_get_constant_name_and_type(clazz, cid->nameAndTypeIndex);
+    Utf8String *ustr_invokeName = nat ? class_get_utf8_string(clazz, nat->nameIndex) : NULL;
+    Instance *jstr_invokeName = ustr_invokeName ? jstring_create(ustr_invokeName, runtime) : NULL;
     push_ref(stack, jstr_invokeName); //invokeName
 
-    Utf8String *ustr_invokeType = class_get_constant_utf8(clazz, class_get_constant_name_and_type(clazz, cid->nameAndTypeIndex)->typeIndex)->utfstr;
-    Instance *mt_invokeType = method_type_create(runtime, clazz->jloader, ustr_invokeType);
+    Utf8String *ustr_invokeType = nat ? class_get_utf8_string(clazz, nat->typeIndex) : NULL;
+    Instance *mt_invokeType = ustr_invokeType ? method_type_create(runtime, clazz->jloader, ustr_invokeType) : NULL;
     push_ref(stack, mt_invokeType); //invokeMethodType
 
     //other bootMethod parameter
@@ -192,11 +199,19 @@ s32 invokedynamic_prepare(Runtime *runtime, BootstrapMethod *bootMethod, Constan
     s32 i;
     for (i = 0; i < args_cnt; i++) {
         ConstantItem *item = class_get_constant_item(clazz, bootMethod->bootstrap_arguments[i]);
+        if (!item) {
+            if (args_cnt <= ALT_PARA) {
+                push_ref(stack, NULL);
+            } else {
+                jarray_set_field(more_args, i, 0);
+            }
+            continue;
+        }
         switch (item->tag) {
             case CONSTANT_METHOD_TYPE: {
                 ConstantMethodType *cmt = (ConstantMethodType *) item;
-                Utf8String *arg = class_get_constant_utf8(clazz, cmt->descriptor_index)->utfstr;
-                Instance *mt = method_type_create(runtime, clazz->jloader, arg);
+                Utf8String *arg = class_get_utf8_string(clazz, cmt->descriptor_index);
+                Instance *mt = arg ? method_type_create(runtime, clazz->jloader, arg) : NULL;
                 if (args_cnt <= ALT_PARA) {
                     push_ref(stack, mt);
                 } else {
@@ -206,8 +221,8 @@ s32 invokedynamic_prepare(Runtime *runtime, BootstrapMethod *bootMethod, Constan
             }
             case CONSTANT_STRING_REF: {
                 ConstantStringRef *csr = (ConstantStringRef *) item;
-                Utf8String *arg = class_get_constant_utf8(clazz, csr->stringIndex)->utfstr;
-                Instance *spec = jstring_create(arg, runtime);
+                Utf8String *arg = class_get_utf8_string(clazz, csr->stringIndex);
+                Instance *spec = arg ? jstring_create(arg, runtime) : NULL;
                 if (args_cnt <= ALT_PARA) {
                     push_ref(stack, spec);
                 } else {
@@ -215,10 +230,24 @@ s32 invokedynamic_prepare(Runtime *runtime, BootstrapMethod *bootMethod, Constan
                 }
                 break;
             }
+            case CONSTANT_CLASS: {
+                ConstantClassRef *ccr = (ConstantClassRef *) item;
+                JClass *argCls = ccr->name ? classes_load_get_with_clinit(clazz->jloader, ccr->name, runtime) : NULL;
+                if (argCls && !argCls->ins_class) {
+                    argCls->ins_class = insOfJavaLangClass_create_get(runtime, argCls);
+                }
+                Instance *clsIns = argCls ? argCls->ins_class : NULL;
+                if (args_cnt <= ALT_PARA) {
+                    push_ref(stack, clsIns);
+                } else {
+                    jarray_set_field(more_args, i, (s64) (intptr_t) clsIns);
+                }
+                break;
+            }
             case CONSTANT_METHOD_HANDLE: {
                 ConstantMethodHandle *cmh = (ConstantMethodHandle *) item;
                 MethodInfo *mip = find_methodInfo_by_methodref(clazz, cmh->reference_index, runtime);
-                Instance *mh = method_handle_create(runtime, mip, cmh->reference_kind);
+                Instance *mh = mip ? method_handle_create(runtime, mip, cmh->reference_kind) : NULL;
                 if (args_cnt <= ALT_PARA) {
                     push_ref(stack, mh);
                 } else {
@@ -234,8 +263,49 @@ s32 invokedynamic_prepare(Runtime *runtime, BootstrapMethod *bootMethod, Constan
                     _null_throw_exception(stack, runtime);
                     return RUNTIME_STATUS_EXCEPTION;
                 }
-                if (args_cnt <= ALT_PARA) {
-                } else {
+                if (args_cnt > ALT_PARA) {
+                    Instance *ins = pop_ref(stack);
+                    jarray_set_field(more_args, i, (s64) (intptr_t) ins);
+                }
+                break;
+            }
+            case CONSTANT_FLOAT: {
+                ConstantFloat *cf = (ConstantFloat *) item;
+                push_float(stack, cf->value);
+                s32 ret = execute_method_impl(runtime->jvm->shortcut.float_valueOf, runtime);
+                if (ret != RUNTIME_STATUS_NORMAL) {
+                    _null_throw_exception(stack, runtime);
+                    return RUNTIME_STATUS_EXCEPTION;
+                }
+                if (args_cnt > ALT_PARA) {
+                    Instance *ins = pop_ref(stack);
+                    jarray_set_field(more_args, i, (s64) (intptr_t) ins);
+                }
+                break;
+            }
+            case CONSTANT_LONG: {
+                ConstantLong *cl = (ConstantLong *) item;
+                push_long(stack, cl->value);
+                s32 ret = execute_method_impl(runtime->jvm->shortcut.long_valueOf, runtime);
+                if (ret != RUNTIME_STATUS_NORMAL) {
+                    _null_throw_exception(stack, runtime);
+                    return RUNTIME_STATUS_EXCEPTION;
+                }
+                if (args_cnt > ALT_PARA) {
+                    Instance *ins = pop_ref(stack);
+                    jarray_set_field(more_args, i, (s64) (intptr_t) ins);
+                }
+                break;
+            }
+            case CONSTANT_DOUBLE: {
+                ConstantDouble *cd = (ConstantDouble *) item;
+                push_double(stack, cd->value);
+                s32 ret = execute_method_impl(runtime->jvm->shortcut.double_valueOf, runtime);
+                if (ret != RUNTIME_STATUS_NORMAL) {
+                    _null_throw_exception(stack, runtime);
+                    return RUNTIME_STATUS_EXCEPTION;
+                }
+                if (args_cnt > ALT_PARA) {
                     Instance *ins = pop_ref(stack);
                     jarray_set_field(more_args, i, (s64) (intptr_t) ins);
                 }
@@ -258,10 +328,11 @@ s32 invokedynamic_prepare(Runtime *runtime, BootstrapMethod *bootMethod, Constan
     }
 
     //get bootmethod
-    MethodInfo *boot_m = find_methodInfo_by_methodref(clazz, class_get_method_handle(clazz, bootMethod->bootstrap_method_ref)->reference_index, runtime);
+    ConstantMethodHandle *bootMh = class_get_method_handle(clazz, bootMethod->bootstrap_method_ref);
+    MethodInfo *boot_m = bootMh ? find_methodInfo_by_methodref(clazz, bootMh->reference_index, runtime) : NULL;
     if (!boot_m) {
-        ConstantMethodRef *cmr = class_get_constant_method_ref(clazz, class_get_method_handle(clazz, bootMethod->bootstrap_method_ref)->reference_index);
-        _nosuchmethod_check_exception(utf8_cstr(cmr->name), stack, runtime);
+        ConstantMethodRef *cmr = bootMh ? class_get_constant_method_ref(clazz, bootMh->reference_index) : NULL;
+        _nosuchmethod_check_exception(cmr && cmr->name ? utf8_cstr(cmr->name) : "bootstrapMethod", stack, runtime);
         return RUNTIME_STATUS_EXCEPTION;
     } else {
         s32 ret = execute_method_impl(boot_m, runtime);
@@ -278,6 +349,7 @@ s32 invokedynamic_prepare(Runtime *runtime, BootstrapMethod *bootMethod, Constan
                 ret = execute_method_impl(finder, runtime);
                 if (ret == RUNTIME_STATUS_NORMAL) {
                     MethodInfo *make = (MethodInfo *) (intptr_t) pop_long(stack);
+                    cid->make = make;
                     bootMethod->make = make;
                 }
             }
@@ -827,14 +899,20 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
 
                         case op_ldc:
                         case op_ldc_w: {
+                            s32 ldc_len;
                             if (*runtime->pc == op_ldc) {
                                 idx = runtime->pc[1];
-                                runtime->pc += 2;
+                                ldc_len = 2;
                             } else {
                                 idx = *((u16 *) (runtime->pc + 1));
-                                runtime->pc += 3;
+                                ldc_len = 3;
                             }
                             ConstantItem *item = class_get_constant_item(clazz, idx);
+                            if (!item) {
+                                stack->sp = sp;
+                                push_ref(stack, (__refer) exception_create_str(JVM_EXCEPTION_CLASSNOTFOUND, runtime, "Invalid constant pool index"));
+                                goto label_exception_handle;
+                            }
                             switch (item->tag) {
                                 case CONSTANT_INTEGER:
                                 case CONSTANT_FLOAT: {
@@ -847,18 +925,25 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                                     break;
                                 }
                                 case CONSTANT_STRING_REF: {
-                                    ConstantUTF8 *cutf = class_get_constant_utf8(clazz, class_get_constant_stringref(clazz, idx)->stringIndex);
-                                    (sp++)->rvalue = cutf->jstr;
+                                    ConstantStringRef *csr = class_get_constant_stringref(clazz, idx);
+                                    ConstantUTF8 *cutf = csr ? class_get_constant_utf8(clazz, csr->stringIndex) : NULL;
+                                    (sp++)->rvalue = cutf ? cutf->jstr : NULL;
 
 #if _JVM_DEBUG_LOG_LEVEL > 5
                                     invoke_deepth(runtime);
-                                    jvm_printf("ldc: [%llx] =\"%s\"\n", (s64) (intptr_t) cutf->jstr, utf8_cstr(cutf->utfstr));
+                                    jvm_printf("ldc: [%llx] =\"%s\"\n", (s64) (intptr_t) (cutf ? cutf->jstr : NULL), cutf ? utf8_cstr(cutf->utfstr) : "");
 #endif
                                     break;
                                 }
                                 case CONSTANT_CLASS: {
                                     stack->sp = sp;
-                                    other = classes_load_get_with_clinit(clazz->jloader, class_get_constant_classref(clazz, idx)->name, runtime);
+                                    ConstantClassRef *ccr = class_get_constant_classref(clazz, idx);
+                                    other = (ccr && ccr->name) ? classes_load_get_with_clinit(clazz->jloader, ccr->name, runtime) : NULL;
+                                    if (!other) {
+                                        push_ref(stack, (__refer) exception_create_str(JVM_EXCEPTION_CLASSNOTFOUND, runtime,
+                                                (ccr && ccr->name) ? utf8_cstr(ccr->name) : "Class not found"));
+                                        goto label_exception_handle;
+                                    }
                                     if (!other->ins_class) {
                                         other->ins_class = insOfJavaLangClass_create_get(runtime, other);
                                     }
@@ -866,10 +951,30 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                                     (sp++)->rvalue = other->ins_class;
                                     break;
                                 }
+                                case CONSTANT_METHOD_TYPE: {
+                                    stack->sp = sp;
+                                    ConstantMethodType *cmt = class_get_method_type(clazz, idx);
+                                    Utf8String *desc = cmt ? class_get_utf8_string(clazz, cmt->descriptor_index) : NULL;
+                                    ins = desc ? method_type_create(runtime, clazz->jloader, desc) : NULL;
+                                    sp = stack->sp;
+                                    (sp++)->rvalue = ins;
+                                    break;
+                                }
+                                case CONSTANT_METHOD_HANDLE: {
+                                    stack->sp = sp;
+                                    ConstantMethodHandle *cmh = class_get_method_handle(clazz, idx);
+                                    MethodInfo *mip = cmh ? find_methodInfo_by_methodref(clazz, cmh->reference_index, runtime) : NULL;
+                                    ins = mip ? method_handle_create(runtime, mip, cmh->reference_kind) : NULL;
+                                    sp = stack->sp;
+                                    (sp++)->rvalue = ins;
+                                    break;
+                                }
                                 default: {
-                                    jvm_printf("ldc: something not implemention \n");
+                                    jvm_printf("ldc: unsupported constant tag %d\n", item->tag);
+                                    (sp++)->rvalue = NULL;
                                 }
                             }
+                            runtime->pc += ldc_len;
                             break;
                         }
 
@@ -3168,9 +3273,14 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                         case op_invokedynamic: {
                             //get bootMethod struct
                             cid = class_get_invoke_dynamic(clazz, *((u16 *) (runtime->pc + 1)));
+                            if (!cid || !clazz->bootstrapMethodAttr ||
+                                cid->bootstrap_method_attr_index >= clazz->bootstrapMethodAttr->num_bootstrap_methods) {
+                                err_msg = "Invalid BootstrapMethods index";
+                                goto label_nosuchmethod_throw;
+                            }
                             bootMethod = &clazz->bootstrapMethodAttr->bootstrap_methods[cid->bootstrap_method_attr_index];//Boot
 
-                            if (bootMethod->make == NULL) {
+                            if (cid->make == NULL) {
                                 stack->sp = sp;
                                 ret = invokedynamic_prepare(runtime, bootMethod, cid);
                                 sp = stack->sp;
@@ -3178,7 +3288,7 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                                     goto label_exception_handle;
                                 }
                             }
-                            m = bootMethod->make;
+                            m = cid->make;
 
                             if (!m) {
                                 err_msg = "Lambda generated method";
@@ -3433,7 +3543,9 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                                     break;
                                 }
                                 default:
+                                    stack->sp = sp;
                                     _op_notsupport(runtime->pc, runtime);
+                                    goto label_exception_handle;
                             }
                             break;
                         }
@@ -3988,8 +4100,11 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                         case op_invokedynamic_fast: {
                             //get bootMethod struct
                             cid = class_get_invoke_dynamic(clazz, *((u16 *) (runtime->pc + 1)));
-                            bootMethod = &clazz->bootstrapMethodAttr->bootstrap_methods[cid->bootstrap_method_attr_index];//Boot
-                            m = bootMethod->make;
+                            m = cid ? cid->make : NULL;
+                            if (!m) {
+                                *runtime->pc = op_invokedynamic;
+                                break;
+                            }
 
 #if _JVM_DEBUG_PROFILE
                             spent = nanoTime() - start_at;
@@ -4007,7 +4122,9 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                         }
 
                         default:
+                            stack->sp = sp;
                             _op_notsupport(runtime->pc, runtime);
+                            goto label_exception_handle;
                     }
 
                     /* ================================== runtime->pc end =============================*/

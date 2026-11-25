@@ -291,7 +291,8 @@ class GameViewController: UIViewController, UITextFieldDelegate {
     private var numpadView: NumpadView?
 
     // Decade state
-    private var isKeepAwake = false
+    private var isKeepAwake = DecadeBackgroundKeeper.shared.isTreoActive
+    private var isOledSleeping = false
     private var isAutoCleanRam = true
     private var isKeypadHidden = false
     private var keypadCurrentHeight: CGFloat = 280
@@ -1342,6 +1343,12 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         popup.onToggleSplitView = { [weak self] in
             self?.toggleSplitView()
         }
+        popup.onOledSleepMode = { [weak self] in
+            self?.enterOledSleepMode()
+        }
+        popup.onHideApp = { [weak self] in
+            self?.hideAppToBackground()
+        }
         popup.onOpenNativeKeyboard = { [weak self] in
             self?.nativeKeyboardTapped()
         }
@@ -1497,14 +1504,18 @@ class GameViewController: UIViewController, UITextFieldDelegate {
 
     @objc private func handleAppForegroundChange() {
         isAppInBackground = false
-        j2me_render_set_background(0)
+        if !isOledSleeping {
+            j2me_render_set_background(0)
+        }
         // Request immediate frame redraw upon unlock
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            if let img = GameViewController.slotFrames[self.activeSlot] {
+            if !self.isOledSleeping, let img = GameViewController.slotFrames[self.activeSlot] {
                 self.emulatorView.displayImage(img)
             }
-            j2me_input_post_key(0, 0)
+            if !self.isOledSleeping {
+                j2me_input_post_key(0, 0)
+            }
         }
     }
 
@@ -1618,34 +1629,78 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         }, completion: nil)
     }
 
-    // OLED Pure Black Overlay for authentic "Treo tắt màn"
+    // OLED Pure Black Overlay for authentic "Ngủ Ẩn / Treo tắt màn"
     private lazy var oledBlackOverlay: UIView = {
         let v = UIView(frame: UIScreen.main.bounds)
         v.backgroundColor = .black
+        v.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         v.isUserInteractionEnabled = true
-        let tap = UITapGestureRecognizer(target: self, action: #selector(dismissOledBlackOverlay))
-        v.addGestureRecognizer(tap)
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(dismissOledBlackOverlay))
+        doubleTap.numberOfTapsRequired = 2
+        v.addGestureRecognizer(doubleTap)
         let lbl = UILabel()
-        lbl.text = "🌙 Đang treo tắt màn (Tiết kiệm pin)\nChạm vào màn hình để bật lại sáng"
-        lbl.numberOfLines = 2
+        lbl.text = "🌙 Đang ngủ ẩn (Tiết kiệm pin OLED — Game vẫn chạy ngầm 24/7)\nChạm ĐÚP (2 lần) vào màn hình để bật sáng lại"
+        lbl.numberOfLines = 3
         lbl.textAlignment = .center
-        lbl.textColor = UIColor(white: 0.35, alpha: 1.0)
-        lbl.font = .systemFont(ofSize: 14, weight: .medium)
+        lbl.textColor = UIColor(white: 0.30, alpha: 1.0)
+        lbl.font = .systemFont(ofSize: 13, weight: .medium)
         lbl.translatesAutoresizingMaskIntoConstraints = false
         v.addSubview(lbl)
         NSLayoutConstraint.activate([
             lbl.centerXAnchor.constraint(equalTo: v.centerXAnchor),
             lbl.centerYAnchor.constraint(equalTo: v.centerYAnchor),
+            lbl.leadingAnchor.constraint(greaterThanOrEqualTo: v.leadingAnchor, constant: 24),
+            lbl.trailingAnchor.constraint(lessThanOrEqualTo: v.trailingAnchor, constant: -24),
         ])
         return v
     }()
 
     @objc private func dismissOledBlackOverlay() {
+        isOledSleeping = false
+        if !isAppInBackground && !DecadePiPManager.shared.isPiPActive {
+            j2me_render_set_background(0)
+            j2me_input_post_key(0, 0)
+        }
         UIView.animate(withDuration: 0.25, animations: {
             self.oledBlackOverlay.alpha = 0
         }) { _ in
             self.oledBlackOverlay.removeFromSuperview()
             self.oledBlackOverlay.alpha = 1.0
+        }
+    }
+
+    private func enterOledSleepMode() {
+        isKeepAwake = true
+        DecadeBackgroundKeeper.shared.setTreoActive(true)
+        DecadeBackgroundKeeper.shared.startKeepalive()
+        isOledSleeping = true
+        if !DecadePiPManager.shared.isPiPActive {
+            j2me_render_set_background(1)
+        }
+        if let win = view.window {
+            oledBlackOverlay.frame = win.bounds
+            if oledBlackOverlay.superview == nil {
+                win.addSubview(oledBlackOverlay)
+            }
+            setupFloatingBubble()
+            DecadeFloatingBubble.shared.show(in: win)
+            win.bringSubviewToFront(DecadeFloatingBubble.shared)
+        }
+    }
+
+    /// Ẩn ứng dụng xuống nền iOS (tương đương J2ME NST MicroController.HideApp: giữ Sticky + BackgroundAudio rồi thu gọn sau 0.3s)
+    private func hideAppToBackground() {
+        isKeepAwake = true
+        DecadeBackgroundKeeper.shared.setTreoActive(true)
+        DecadeBackgroundKeeper.shared.startKeepalive()
+        showToast(message: "Đang ẩn ứng dụng chạy ngầm xuyên đêm...")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            let suspendSel = NSSelectorFromString("suspend")
+            if UIApplication.shared.responds(to: suspendSel) {
+                UIApplication.shared.perform(suspendSel)
+            } else {
+                self?.enterOledSleepMode()
+            }
         }
     }
 
@@ -1660,8 +1715,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
             if self.oledBlackOverlay.superview != nil {
                 self.dismissOledBlackOverlay()
             } else {
-                self.view.window?.addSubview(self.oledBlackOverlay)
-                self.view.window?.bringSubviewToFront(DecadeFloatingBubble.shared)
+                self.enterOledSleepMode()
             }
         }
         DecadeFloatingBubble.shared.onSelectTabPrompt = { [weak self] in
@@ -1722,10 +1776,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         isKeepAwake.toggle()
         DecadeBackgroundKeeper.shared.setTreoActive(isKeepAwake)
         if isKeepAwake {
-            view.window?.addSubview(oledBlackOverlay)
-            setupFloatingBubble()
-            DecadeFloatingBubble.shared.show(in: view.window)
-            view.window?.bringSubviewToFront(DecadeFloatingBubble.shared)
+            enterOledSleepMode()
             DecadePiPManager.shared.startPiP()
             showToast(message: "Đã bật treo & Cửa sổ nổi ngoài màn hình")
         } else {

@@ -476,8 +476,8 @@ void class_clear_cached_virtualmethod(MiniJVM *jvm, JClass *tgt) {
                 }
             }
             for (i = 0; i < clazz->constantPool.interfaceMethodRef->length; i++) {
-                ConstantMethodRef *cmr = (ConstantMethodRef *) arraylist_get_value(clazz->constantPool.methodRef, i);
-                if (cmr->virtual_methods) {
+                ConstantMethodRef *cmr = (ConstantMethodRef *) arraylist_get_value(clazz->constantPool.interfaceMethodRef, i);
+                if (cmr && cmr->virtual_methods) {
 #if _JVM_DEBUG_LOG_LEVEL > 2
                     if (pairlist_get(cmr->virtual_methods, tgt)) {
                         jvm_printf("virtual method clear %s in %s.%s\n", utf8_cstr(tgt->name), utf8_cstr(cmr->clsName), utf8_cstr(cmr->name));
@@ -642,6 +642,9 @@ MethodInfo *find_instance_methodInfo_by_name(Instance *ins, Utf8String *methodNa
 
 MethodInfo *find_methodInfo_by_methodref(JClass *clazz, s32 method_ref, Runtime *runtime) {
     ConstantMethodRef *cmr = class_get_constant_method_ref(clazz, method_ref);
+    if (!cmr || !cmr->clsName || !cmr->name || !cmr->descriptor) {
+        return NULL;
+    }
     Utf8String *clsName = cmr->clsName;
     Utf8String *methodName = cmr->name;
     Utf8String *methodType = cmr->descriptor;
@@ -659,14 +662,47 @@ MethodInfo *find_methodInfo_by_name_c(c8 const *pclsName, c8 const *pmethodName,
     return mi;
 }
 
+static MethodInfo *find_interface_default_method_impl(JClass *clazz, Utf8String *methodName, Utf8String *methodType, Instance *jloader, Runtime *runtime) {
+    if (!clazz) return NULL;
+    s32 i;
+    // Search all direct/inherited interfaces across the class hierarchy (class methods already checked first per JVMS 5.4.3.3)
+    JClass *cur = clazz;
+    while (cur) {
+        for (i = 0; i < cur->interfacePool.clasz_used; i++) {
+            ConstantClassRef *ccr = (cur->interfacePool.clasz + i);
+            Utf8String *icl_name = class_get_utf8_string(cur, ccr->stringIndex);
+            if (!icl_name) continue;
+            JClass *icl = classes_load_get_without_resolve(jloader, icl_name, runtime);
+            if (!icl) continue;
+            MethodPool *fp = &(icl->methodPool);
+            s32 j;
+            for (j = 0; j < fp->method_used; j++) {
+                MethodInfo *tmp = &fp->method[j];
+                if (utf8_equals(methodName, tmp->name) == 1
+                    && utf8_equals(methodType, tmp->descriptor) == 1
+                    && (tmp->converted_code != NULL || (tmp->is_native))) {
+                    if (!tmp->_this_class) tmp->_this_class = icl;
+                    return tmp;
+                }
+            }
+            MethodInfo *deeper = find_interface_default_method_impl(icl, methodName, methodType, jloader, runtime);
+            if (deeper) return deeper;
+        }
+        cur = getSuperClass(cur);
+    }
+    return NULL;
+}
+
 MethodInfo *find_methodInfo_by_name(Utf8String *clsName, Utf8String *methodName, Utf8String *methodType, Instance *jloader, Runtime *runtime) {
     MethodInfo *mi = NULL;
-    JClass *other = classes_load_get_without_resolve(jloader, clsName, runtime);
-    if (!other) {
+    JClass *startClass = classes_load_get_without_resolve(jloader, clsName, runtime);
+    if (!startClass) {
         jvm_printf("method not exist :%s.%s%s\n", utf8_cstr(clsName), utf8_cstr(methodName), utf8_cstr(methodType));
         return NULL;
     }
 
+    // 1. Walk class/superclass chain first (in Java 8, concrete/abstract class methods take precedence over interface default methods)
+    JClass *other = startClass;
     while (mi == NULL && other) {
         MethodPool *fp = &(other->methodPool);
         s32 i;
@@ -681,24 +717,31 @@ MethodInfo *find_methodInfo_by_name(Utf8String *clsName, Utf8String *methodName,
                 break;
             }
         }
-        //find interface default method implementation JDK8
-        if (mi == NULL) {
-            for (i = 0; i < other->interfacePool.clasz_used; i++) {
-                ConstantClassRef *ccr = (other->interfacePool.clasz + i);
-                Utf8String *icl_name = class_get_constant_utf8(other, ccr->stringIndex)->utfstr;
-                classes_load_get_without_resolve(jloader, icl_name, runtime);
-                MethodInfo *imi = find_methodInfo_by_name(icl_name, methodName, methodType, jloader, runtime);
-                if (imi != NULL && imi->converted_code != NULL) {
-                    mi = imi;
-                    break;
-                }
-            }
-        }
-        //find superclass
+        if (mi != NULL) break;
+
         s32 sonIsInterface = other->cff.access_flags & ACC_INTERFACE;
         other = getSuperClass(other);
-        if (sonIsInterface && !(other->cff.access_flags & ACC_INTERFACE)) {//interface can not find method from java.lang.Object
+        if (other && sonIsInterface && !(other->cff.access_flags & ACC_INTERFACE)) {//interface can not find method from java.lang.Object
             other = NULL;
+        }
+    }
+
+    // 2. Fall back to Java 8 interface default methods (or superinterface declarations for interfaces)
+    if (mi == NULL) {
+        mi = find_interface_default_method_impl(startClass, methodName, methodType, jloader, runtime);
+    }
+    if (mi == NULL && (startClass->cff.access_flags & ACC_INTERFACE)) {
+        // Abstract method declared in superinterface when resolving interface methodref
+        s32 i;
+        for (i = 0; i < startClass->interfacePool.clasz_used; i++) {
+            ConstantClassRef *ccr = (startClass->interfacePool.clasz + i);
+            Utf8String *icl_name = class_get_utf8_string(startClass, ccr->stringIndex);
+            if (!icl_name) continue;
+            MethodInfo *imi = find_methodInfo_by_name(icl_name, methodName, methodType, jloader, runtime);
+            if (imi != NULL) {
+                mi = imi;
+                break;
+            }
         }
     }
     return mi;
@@ -723,9 +766,11 @@ static void find_supers_impl(JClass *clazz, Runtime *runtime, ArrayList *list) {
         //find interface default method implementation JDK8
         for (i = 0; i < other->interfacePool.clasz_used; i++) {
             ConstantClassRef *ccr = (other->interfacePool.clasz + i);
-            Utf8String *icl_name = class_get_constant_utf8(other, ccr->stringIndex)->utfstr;
-            JClass *icl = classes_load_get_without_resolve(other->jloader, icl_name, runtime);
-            find_supers_impl(icl, runtime, list);//find interface's interfaces
+            Utf8String *icl_name = class_get_utf8_string(other, ccr->stringIndex);
+            JClass *icl = icl_name ? classes_load_get_without_resolve(other->jloader, icl_name, runtime) : NULL;
+            if (icl) {
+                find_supers_impl(icl, runtime, list);//find interface's interfaces
+            }
         }
         //find superclass
         other = getSuperClass(other);
@@ -738,9 +783,19 @@ void find_supers(JClass *clazz, Runtime *runtime) {
 
 /* Get Major Version String */
 c8 *getMajorVersionString(u16 major_number) {
-    if (major_number == 0x33)
-        return "J2SE 7";
-    if (major_number == 0x32)
-        return "J2SE 6.0";
-    return "NONE";
+    switch (major_number) {
+        case 45: return "JDK 1.1";
+        case 46: return "J2SE 1.2";
+        case 47: return "J2SE 1.3";
+        case 48: return "J2SE 1.4";
+        case 49: return "J2SE 5.0";
+        case 50: return "Java SE 6";
+        case 51: return "Java SE 7";
+        case 52: return "Java SE 8";
+        case 53: return "Java SE 9";
+        case 55: return "Java SE 11";
+        case 61: return "Java SE 17";
+        case 65: return "Java SE 21";
+        default: return "Java Class";
+    }
 }

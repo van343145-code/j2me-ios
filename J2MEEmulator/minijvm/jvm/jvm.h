@@ -321,7 +321,10 @@ enum {
     CONSTANT_NAME_AND_TYPE = 12,
     CONSTANT_METHOD_HANDLE = 15,
     CONSTANT_METHOD_TYPE = 16,
+    CONSTANT_DYNAMIC = 17,
     CONSTANT_INVOKE_DYNAMIC = 18,
+    CONSTANT_MODULE = 19,
+    CONSTANT_PACKAGE = 20,
 };
 //=======================  typedef  =============================
 
@@ -838,7 +841,14 @@ typedef struct _ConstantInvokeDynamic {
     ConstantItem item;
     u16 bootstrap_method_attr_index;
     u16 nameAndTypeIndex;
-} ConstantInvokeDynamic;
+    // Per-callsite resolved factory cache (prevents collisions when multiple callsites share a BootstrapMethod entry)
+    MethodInfo *make;
+} ConstantInvokeDynamic, ConstantDynamic;
+
+typedef struct _ConstantModule {
+    ConstantItem item;
+    u16 name_index;
+} ConstantModule, ConstantPackage;
 
 
 //============================================
@@ -1214,79 +1224,85 @@ Instance *instance_copy(Runtime *runtime, Instance *src, s32 deep_copy);
 //======================= bytecode =============================
 
 
-/* find UTF8 */
-static inline ConstantUTF8 *class_get_constant_utf8(JClass *clazz, s32 index) {
-    return (ConstantUTF8 *) (clazz->constant_item_ptr[index]);
+static inline ConstantItem *class_get_constant_item(JClass *clazz, s32 index) {
+    if (!clazz || !clazz->constant_item_ptr || index <= 0 || index >= clazz->constant_item_count) return NULL;
+    return (ConstantItem *) (clazz->constant_item_ptr[index]);
 }
 
-/* Find Class Reference */
+/* find UTF8 */
+static inline ConstantUTF8 *class_get_constant_utf8(JClass *clazz, s32 index) {
+    return (ConstantUTF8 *) class_get_constant_item(clazz, index);
+}
+
+/* Find String Reference */
 static inline ConstantStringRef *class_get_constant_stringref(JClass *clazz, s32 index) {
-    return (ConstantStringRef *) (clazz->constant_item_ptr[index]);
+    return (ConstantStringRef *) class_get_constant_item(clazz, index);
 }
 
 
 /* Find Class Reference */
 static inline ConstantClassRef *class_get_constant_classref(JClass *clazz, s32 index) {
-    return (ConstantClassRef *) (clazz->constant_item_ptr[index]);
+    return (ConstantClassRef *) class_get_constant_item(clazz, index);
 }
 
 static inline ConstantFieldRef *class_get_constant_fieldref(JClass *clazz, s32 index) {
-    return (ConstantFieldRef *) (clazz->constant_item_ptr[index]);
-}
-
-static inline ConstantItem *class_get_constant_item(JClass *clazz, s32 index) {
-    return (ConstantItem *) (clazz->constant_item_ptr[index]);
+    return (ConstantFieldRef *) class_get_constant_item(clazz, index);
 }
 
 /* Find Method Reference */
 static inline ConstantMethodRef *class_get_constant_method_ref(JClass *clazz, s32 index) {
-    return (ConstantMethodRef *) (clazz->constant_item_ptr[index]);
+    return (ConstantMethodRef *) class_get_constant_item(clazz, index);
 }
 
 static inline ConstantInterfaceMethodRef *
 class_get_constant_interface_method_ref(JClass *clazz, s32 index) {
-    return (ConstantInterfaceMethodRef *) (clazz->constant_item_ptr[index]);
+    return (ConstantInterfaceMethodRef *) class_get_constant_item(clazz, index);
 }
 
 /* Find Name and Type Reference */
 static inline ConstantNameAndType *class_get_constant_name_and_type(JClass *clazz, s32 index) {
-    return (ConstantNameAndType *) (clazz->constant_item_ptr[index]);
+    return (ConstantNameAndType *) class_get_constant_item(clazz, index);
 }
 
 /* get integer from constant pool */
 static inline s32 class_get_constant_integer(JClass *clazz, s32 index) {
-    return ((ConstantInteger *) (clazz->constant_item_ptr[index]))->value;
+    ConstantInteger *ci = (ConstantInteger *) class_get_constant_item(clazz, index);
+    return ci ? ci->value : 0;
 }
 
 /* get long from constant pool */
 static inline s64 class_get_constant_long(JClass *clazz, s32 index) {
-    return ((ConstantLong *) (clazz->constant_item_ptr[index]))->value;
+    ConstantLong *cl = (ConstantLong *) class_get_constant_item(clazz, index);
+    return cl ? cl->value : 0;
 }
 
 /* get f32 from constant pool */
 static inline f32 class_get_constant_float(JClass *clazz, s32 index) {
-    return ((ConstantFloat *) (clazz->constant_item_ptr[index]))->value;
+    ConstantFloat *cf = (ConstantFloat *) class_get_constant_item(clazz, index);
+    return cf ? cf->value : 0.0f;
 }
 
 /* get f64 from constant pool */
 static inline f64 class_get_double_from_constant_pool(JClass *clazz, s32 index) {
-    return ((ConstantDouble *) (clazz->constant_item_ptr[index]))->value;
+    ConstantDouble *cd = (ConstantDouble *) class_get_constant_item(clazz, index);
+    return cd ? cd->value : 0.0;
 }
 
 static inline Utf8String *class_get_utf8_string(JClass *clazz, s32 index) {
-    return ((ConstantUTF8 *) (clazz->constant_item_ptr[index]))->utfstr;
+    ConstantUTF8 *cu = class_get_constant_utf8(clazz, index);
+    return cu ? cu->utfstr : NULL;
 }
 
 static inline ConstantMethodHandle *class_get_method_handle(JClass *clazz, s32 index) {
-    return (ConstantMethodHandle *) (clazz->constant_item_ptr[index]);
+    return (ConstantMethodHandle *) class_get_constant_item(clazz, index);
 }
 
 static inline ConstantMethodType *class_get_method_type(JClass *clazz, s32 index) {
-    return (ConstantMethodType *) (clazz->constant_item_ptr[index]);
+    return (ConstantMethodType *) class_get_constant_item(clazz, index);
 }
 
 static inline ConstantInvokeDynamic *class_get_invoke_dynamic(JClass *clazz, s32 index) {
-    return (ConstantInvokeDynamic *) (clazz->constant_item_ptr[index]);
+    return (ConstantInvokeDynamic *) class_get_constant_item(clazz, index);
 }
 
 MethodInfo *find_instance_methodInfo_by_name(Instance *ins, Utf8String *methodName, Utf8String *methodType, Runtime *runtime);

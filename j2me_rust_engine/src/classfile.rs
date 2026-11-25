@@ -16,6 +16,12 @@ pub enum Constant {
     MethodRef { class_index: u16, name_and_type_index: u16 },
     InterfaceMethodRef { class_index: u16, name_and_type_index: u16 },
     NameAndType { name_index: u16, descriptor_index: u16 },
+    MethodHandle { reference_kind: u8, reference_index: u16 },
+    MethodType { descriptor_index: u16 },
+    Dynamic { bootstrap_method_attr_index: u16, name_and_type_index: u16 },
+    InvokeDynamic { bootstrap_method_attr_index: u16, name_and_type_index: u16 },
+    Module { name_index: u16 },
+    Package { name_index: u16 },
     Placeholder, // Used for second slot of Long/Double
 }
 
@@ -247,6 +253,45 @@ impl ClassFile {
                     let name_index = reader.read_u16()?;
                     let descriptor_index = reader.read_u16()?;
                     cp.push(Constant::NameAndType { name_index, descriptor_index });
+                    i += 1;
+                }
+                15 => {
+                    // CONSTANT_MethodHandle
+                    let reference_kind = reader.read_u8()?;
+                    let reference_index = reader.read_u16()?;
+                    cp.push(Constant::MethodHandle { reference_kind, reference_index });
+                    i += 1;
+                }
+                16 => {
+                    // CONSTANT_MethodType
+                    let descriptor_index = reader.read_u16()?;
+                    cp.push(Constant::MethodType { descriptor_index });
+                    i += 1;
+                }
+                17 => {
+                    // CONSTANT_Dynamic
+                    let bootstrap_method_attr_index = reader.read_u16()?;
+                    let name_and_type_index = reader.read_u16()?;
+                    cp.push(Constant::Dynamic { bootstrap_method_attr_index, name_and_type_index });
+                    i += 1;
+                }
+                18 => {
+                    // CONSTANT_InvokeDynamic
+                    let bootstrap_method_attr_index = reader.read_u16()?;
+                    let name_and_type_index = reader.read_u16()?;
+                    cp.push(Constant::InvokeDynamic { bootstrap_method_attr_index, name_and_type_index });
+                    i += 1;
+                }
+                19 => {
+                    // CONSTANT_Module
+                    let name_index = reader.read_u16()?;
+                    cp.push(Constant::Module { name_index });
+                    i += 1;
+                }
+                20 => {
+                    // CONSTANT_Package
+                    let name_index = reader.read_u16()?;
+                    cp.push(Constant::Package { name_index });
                     i += 1;
                 }
                 _ => return Err(ClassParseError::UnsupportedConstantTag(tag)),

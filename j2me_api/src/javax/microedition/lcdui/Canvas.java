@@ -75,6 +75,9 @@ public abstract class Canvas extends Displayable {
      * PaintEvent implements Event and EventFilter, exactly matching J2ME-Loader.
      * All repaints and dirty rect accumulations are serialized on paintEvent.clip.
      */
+    private static final long BG_FRAME_INTERVAL_MS = 125L; // ~8 FPS trailing pace in background
+    private volatile boolean pendingBgFlush = false;
+
     private class PaintEvent extends Event implements EventFilter {
         final Rect clip = new Rect();
         boolean isPending;
@@ -87,18 +90,11 @@ public abstract class Canvas extends Displayable {
             }
             boolean inBg = false;
             try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
-            if (inBg) {
-                // Background mode: skip drawing to save CPU & battery
-                synchronized (clip) {
-                    isPending = false;
-                    clip.setEmpty();
-                }
-                return;
-            }
 
             int l, t, r, b;
             synchronized (clip) {
                 isPending = false;
+                pendingBgFlush = false;
                 l = clip.left;
                 t = clip.top;
                 r = clip.right;
@@ -110,16 +106,23 @@ public abstract class Canvas extends Displayable {
                 return;
             }
 
+            if (inBg) {
+                limitBgFps();
+            }
+
             synchronized (paintLock) {
                 if (nativeContext == 0) initContext();
                 if (graphics == null) return;
                 graphics.reset(l, t, r - l, b - t);
                 try {
+                    // Run paint() even in background (screen CG draw calls are no-ops in C, while offscreen MutableImages and animation ticks continue)
                     paint(graphics);
                 } catch (Throwable e) {
                     System.out.println("[Canvas] Warning: exception in paint(): " + e);
                 }
-                NativeBridge.flushToScreen(nativeContext);
+                if (!inBg) {
+                    NativeBridge.flushToScreen(nativeContext);
+                }
             }
         }
 
@@ -191,6 +194,34 @@ public abstract class Canvas extends Displayable {
         lastFrameTime = System.currentTimeMillis();
     }
 
+    private void limitBgFps() {
+        try {
+            long millis = BG_FRAME_INTERVAL_MS - (System.currentTimeMillis() - lastFrameTime);
+            if (millis > 0) Thread.sleep(millis);
+        } catch (InterruptedException ignored) {}
+        lastFrameTime = System.currentTimeMillis();
+    }
+
+    /**
+     * Flush any trailing background repaint queued during throttled frame window (matches trailing-frame scheduling).
+     */
+    void flushTrailingRepaintIfNeeded() {
+        if (!isShown() || !pendingBgFlush) return;
+        long now = System.currentTimeMillis();
+        if (now - lastFrameTime < BG_FRAME_INTERVAL_MS) return;
+        boolean post;
+        synchronized (paintEvent.clip) {
+            pendingBgFlush = false;
+            post = (paintEvent.clip.left < paintEvent.clip.right && paintEvent.clip.top < paintEvent.clip.bottom) && !paintEvent.isPending;
+            if (post) {
+                paintEvent.isPending = true;
+            }
+        }
+        if (post) {
+            Display.postEvent(paintEvent);
+        }
+    }
+
     /**
      * The abstract paint method — MIDlets override this.
      */
@@ -207,14 +238,18 @@ public abstract class Canvas extends Displayable {
         if (!isShown()) return;
         boolean inBg = false;
         try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
-        if (inBg) {
-            long now = System.currentTimeMillis();
-            if (now - lastFrameTime < 450L) return;
+        if (!inBg) {
+            limitFps();
         }
-        limitFps();
         boolean post;
         synchronized (paintEvent.clip) {
-            post = paintEvent.invalidateClip(this, x, y, x + w, y + h) && !paintEvent.isPending;
+            boolean hasDirty = paintEvent.invalidateClip(this, x, y, x + w, y + h);
+            if (!hasDirty) return;
+            if (inBg && (System.currentTimeMillis() - lastFrameTime < BG_FRAME_INTERVAL_MS)) {
+                pendingBgFlush = true;
+                return;
+            }
+            post = !paintEvent.isPending;
             if (post) {
                 paintEvent.isPending = true;
             }
@@ -227,6 +262,7 @@ public abstract class Canvas extends Displayable {
     public void forceFullRepaint() {
         if (!isShown()) return;
         synchronized (paintEvent.clip) {
+            pendingBgFlush = false;
             paintEvent.invalidateClip(this, 0, 0, width, height);
             paintEvent.isPending = true;
         }
@@ -275,7 +311,10 @@ public abstract class Canvas extends Displayable {
         }
         boolean inBg = false;
         try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
-        if (inBg) return;
+        if (inBg) {
+            limitBgFps(); // Pace background GameCanvas loops cleanly (~8 FPS) so thread doesn't spin 100% CPU
+            return;
+        }
         limitFps();
         synchronized (paintLock) {
             if (nativeContext == 0) initContext();
@@ -292,7 +331,10 @@ public abstract class Canvas extends Displayable {
         if (!isShown()) return;
         boolean inBg = false;
         try { inBg = NativeBridge.isBackground(); } catch (Throwable ignored) {}
-        if (inBg) return;
+        if (inBg) {
+            limitBgFps();
+            return;
+        }
         limitFps();
         synchronized (paintLock) {
             if (nativeContext == 0) initContext();

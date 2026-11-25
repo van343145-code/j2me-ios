@@ -444,10 +444,8 @@ static s32 n_flushToScreen(Runtime *runtime, JClass *clazz) {
 
     if (atomic_load_explicit(&g_is_background, memory_order_relaxed)) {
         // In background / screen-off mode: dead shells are purged above.
-        // Tiết kiệm 99% CPU khi tắt màn hình: Pacing nhịp game ở mức 28 FPS (~35ms).
-        // Ngăn chặn vòng lặp game quay cuồng 10,000 FPS đốt cháy 100% nhân CPU (17%),
-        // triệt tiêu hoàn toàn việc iOS RunningBoard kill app vì quá tải CPU nền!
-        struct timespec ts = {0, 35 * 1000 * 1000};
+        // Nhường CPU ngắn khi flush trực tiếp trong nền (Canvas đã có pacing ~8 FPS riêng).
+        struct timespec ts = {0, 16 * 1000 * 1000};
         nanosleep(&ts, NULL);
         return RUNTIME_STATUS_NORMAL;
     }
@@ -871,7 +869,10 @@ static s32 n_createImageFromData(Runtime *runtime, JClass *clazz) {
     Instance *arr = env->localvar_getRefer(runtime->localvar, 0);
     s32 offset = env->localvar_getInt(runtime->localvar, 1);
     s32 length = env->localvar_getInt(runtime->localvar, 2);
-    if (!arr) { env->push_long(runtime->stack, 0); return RUNTIME_STATUS_NORMAL; }
+    if (!arr || !arr->arr_body || offset < 0 || length <= 0 || offset > arr->arr_length || length > arr->arr_length - offset) {
+        env->push_long(runtime->stack, 0);
+        return RUNTIME_STATUS_NORMAL;
+    }
     c8 *arrBody = arr->arr_body;
     RenderImage *img = createImageFromData((uint8_t *)arrBody + offset, length);
     env->push_long(runtime->stack, (s64)(intptr_t)img);
@@ -992,7 +993,13 @@ static s32 n_drawRegion(Runtime *runtime, JClass *clazz) {
 
     RenderContext *rc = rc_acquire(ctxHandle);
     RenderImage *img = img_acquire(imgHandle);
-    if (!rc || !img || should_skip_screen_draw(rc)) { img_release(img); rc_release(rc); return RUNTIME_STATUS_NORMAL; }
+    if (!rc || !img || wSrc <= 0 || hSrc <= 0 || img->width <= 0 || img->height <= 0 ||
+        xSrc >= img->width || ySrc >= img->height || xSrc + wSrc <= 0 || ySrc + hSrc <= 0 ||
+        should_skip_screen_draw(rc)) {
+        img_release(img);
+        rc_release(rc);
+        return RUNTIME_STATUS_NORMAL;
+    }
     CGContextRef rctx = rc->ctx;
     CGContextRef ictx = img->ctx;
 
@@ -1148,21 +1155,47 @@ static s32 n_getImageRGB(Runtime *runtime, JClass *clazz) {
     s32 h = env->localvar_getInt(runtime->localvar, 8);
 
     RenderImage *img = img_acquire(imgHandle);
-    if (!img || !arr) { img_release(img); return RUNTIME_STATUS_NORMAL; }
+    if (!img || !img->ctx || !arr || !arr->arr_body || w <= 0 || h <= 0) {
+        img_release(img);
+        return RUNTIME_STATUS_NORMAL;
+    }
 
+    s32 arrLen = arr->arr_length;
     s32 *dstData = (s32 *)arr->arr_body;
     uint8_t *srcData = (uint8_t *)CGBitmapContextGetData(img->ctx);
+    if (!srcData) {
+        img_release(img);
+        return RUNTIME_STATUS_NORMAL;
+    }
     int imgW = img->width;
+    int imgH = img->height;
 
     for (int row = 0; row < h; row++) {
+        int sy = y + row;
+        if (sy < 0 || sy >= imgH) continue;
         for (int col = 0; col < w; col++) {
-            int srcIdx = ((y + row) * imgW + (x + col)) * 4;
+            int sx = x + col;
+            if (sx < 0 || sx >= imgW) continue;
+            int dstIdx = offset + row * scanlength + col;
+            if (dstIdx < 0 || dstIdx >= arrLen) continue;
+            int srcIdx = (sy * imgW + sx) * 4;
             uint8_t b = srcData[srcIdx + 0];
             uint8_t g = srcData[srcIdx + 1];
             uint8_t r = srcData[srcIdx + 2];
             uint8_t a = srcData[srcIdx + 3];
-            s32 argb = (a << 24) | (r << 16) | (g << 8) | b;
-            dstData[offset + row * scanlength + col] = argb;
+            // Un-premultiply RGB (CGContext uses kCGImageAlphaPremultipliedFirst) to restore true J2ME ARGB colors
+            if (a == 0) {
+                r = g = b = 0;
+            } else if (a < 255) {
+                int ur = ((int)r * 255 + (a >> 1)) / a;
+                int ug = ((int)g * 255 + (a >> 1)) / a;
+                int ub = ((int)b * 255 + (a >> 1)) / a;
+                r = (uint8_t)(ur > 255 ? 255 : ur);
+                g = (uint8_t)(ug > 255 ? 255 : ug);
+                b = (uint8_t)(ub > 255 ? 255 : ub);
+            }
+            s32 argb = ((s32)a << 24) | ((s32)r << 16) | ((s32)g << 8) | (s32)b;
+            dstData[dstIdx] = argb;
         }
     }
     img_release(img);

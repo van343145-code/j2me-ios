@@ -1377,12 +1377,36 @@ s32 gen_jit_bytecode_func(struct sljit_compiler *C, MethodInfo *method, Runtime 
                         break;
                     }
                     case CONSTANT_CLASS: {
-                        JClass *cl = classes_load_get_with_clinit(clazz->jloader, class_get_constant_classref(clazz, index)->name, runtime);
+                        ConstantClassRef *ccr = class_get_constant_classref(clazz, index);
+                        JClass *cl = ccr ? classes_load_get_with_clinit(clazz->jloader, ccr->name, runtime) : NULL;
+                        if (!cl) {
+                            return JIT_GEN_ERROR;
+                        }
                         if (!cl->ins_class) {
                             cl->ins_class = insOfJavaLangClass_create_get(runtime, cl);
                         }
                         //push_ref(stack, cl->ins_class);
                         _gen_stack_push_ref(C, SLJIT_IMM, (sljit_sw) cl->ins_class);
+                        break;
+                    }
+                    case CONSTANT_METHOD_TYPE: {
+                        ConstantMethodType *cmt = class_get_method_type(clazz, index);
+                        Utf8String *desc = cmt ? class_get_utf8_string(clazz, cmt->descriptor_index) : NULL;
+                        Instance *mt = desc ? method_type_create(runtime, clazz->jloader, desc) : NULL;
+                        if (!mt) {
+                            return JIT_GEN_ERROR;
+                        }
+                        _gen_stack_push_ref(C, SLJIT_IMM, (sljit_sw) mt);
+                        break;
+                    }
+                    case CONSTANT_METHOD_HANDLE: {
+                        ConstantMethodHandle *cmh = class_get_method_handle(clazz, index);
+                        MethodInfo *mip = cmh ? find_methodInfo_by_methodref(clazz, cmh->reference_index, runtime) : NULL;
+                        Instance *mh = mip ? method_handle_create(runtime, mip, cmh->reference_kind) : NULL;
+                        if (!mh) {
+                            return JIT_GEN_ERROR;
+                        }
+                        _gen_stack_push_ref(C, SLJIT_IMM, (sljit_sw) mh);
                         break;
                     }
                     default: {
@@ -2824,15 +2848,22 @@ s32 gen_jit_bytecode_func(struct sljit_compiler *C, MethodInfo *method, Runtime 
                 s32 idx = *((u16 *) (ip + 1));
 
                 ConstantInvokeDynamic *cid = class_get_invoke_dynamic(clazz, idx);
+                if (!cid || !clazz->bootstrapMethodAttr ||
+                    cid->bootstrap_method_attr_index >= clazz->bootstrapMethodAttr->num_bootstrap_methods) {
+                    return JIT_GEN_ERROR;
+                }
                 BootstrapMethod *bootMethod = &clazz->bootstrapMethodAttr->bootstrap_methods[cid->bootstrap_method_attr_index];//Boot
 
-                if (bootMethod->make == NULL) {
+                if (cid->make == NULL) {
                     s32 ret = invokedynamic_prepare(runtime, bootMethod, cid);
                     if (ret) {
                         return JIT_GEN_ERROR;
                     }
                 }
-                MethodInfo *m = bootMethod->make;
+                MethodInfo *m = cid->make;
+                if (!m) {
+                    return JIT_GEN_ERROR;
+                }
                 //R0 = method
                 sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_R0, 0, SLJIT_IMM, (sljit_sw) m);
                 sljit_emit_op1(C, SLJIT_MOV_P, SLJIT_R1, 0, SLJIT_MEM1(SLJIT_SP), sizeof(sljit_sw) * LOCAL_RUNTIME);

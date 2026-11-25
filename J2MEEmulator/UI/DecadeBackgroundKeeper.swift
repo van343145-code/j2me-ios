@@ -257,22 +257,45 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     }
 
     private func beginAppBackgroundTask() {
-        guard bgTaskID == .invalid else { return }
-        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "J2ME-Decade-AFK") { [weak self] in
+        let work = { [weak self] in
             guard let self = self else { return }
-            print("[DecadeBackgroundKeeper] Background task expiring, renewing...")
-            self.endAppBackgroundTask()
-            if self.isTreoActive {
-                self.beginAppBackgroundTask()
+            if self.bgTaskID != .invalid {
+                if UIApplication.shared.backgroundTimeRemaining > 25.0 {
+                    return
+                }
+                let expired = self.bgTaskID
+                self.bgTaskID = .invalid
+                UIApplication.shared.endBackgroundTask(expired)
             }
+            self.bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "J2ME-Decade-AFK") { [weak self] in
+                guard let self = self else { return }
+                print("[DecadeBackgroundKeeper] Background task expiring, renewing...")
+                self.endAppBackgroundTask()
+                if self.isTreoActive {
+                    self.beginAppBackgroundTask()
+                }
+            }
+        }
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.async(execute: work)
         }
     }
 
     private func endAppBackgroundTask() {
-        if bgTaskID != .invalid {
-            let task = bgTaskID
-            bgTaskID = .invalid
-            UIApplication.shared.endBackgroundTask(task)
+        let work = { [weak self] in
+            guard let self = self else { return }
+            if self.bgTaskID != .invalid {
+                let task = self.bgTaskID
+                self.bgTaskID = .invalid
+                UIApplication.shared.endBackgroundTask(task)
+            }
+        }
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.async(execute: work)
         }
     }
 
@@ -364,6 +387,18 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         )
         nc.addObserver(
             self,
+            selector: #selector(handleSecondaryAudioHint(_:)),
+            name: AVAudioSession.silenceSecondaryAudioHintNotification,
+            object: AVAudioSession.sharedInstance()
+        )
+        nc.addObserver(
+            self,
+            selector: #selector(handleProtectedDataAvailable),
+            name: UIApplication.protectedDataDidBecomeAvailableNotification,
+            object: nil
+        )
+        nc.addObserver(
+            self,
             selector: #selector(handleMemoryWarning),
             name: UIApplication.didReceiveMemoryWarningNotification,
             object: nil
@@ -412,9 +447,11 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         // Chỉ chạy dọn dẹp sâu nếu bấm thủ công hoặc RAM thực sự cao (>150MB) để tránh đơ/khựng khung hình khi treo game
         guard completion != nil || beforeMB > 150.0 else { return }
 
-        URLCache.shared.removeAllCachedResponses()
-        GameViewController.purgeInactiveSlotFrames()
-        DecadePiPManager.shared.purgeBuffers()
+        DispatchQueue.main.async {
+            URLCache.shared.removeAllCachedResponses()
+            GameViewController.purgeInactiveSlotFrames()
+            DecadePiPManager.shared.purgeBuffers()
+        }
 
         DispatchQueue.global(qos: .utility).async {
             jvm_bridge_clean_ram()
@@ -583,12 +620,38 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
               let type = AVAudioSession.InterruptionType(rawValue: typeValue) else { return }
 
         if type == .began {
-            print("[DecadeBackgroundKeeper] Audio interruption began (e.g. phone call).")
+            print("[DecadeBackgroundKeeper] Audio interruption began (e.g. phone call / alarm).")
             beginAppBackgroundTask()
         } else if type == .ended {
             print("[DecadeBackgroundKeeper] Audio interruption ended. Resuming keepalive...")
-            audioQueue.async { [weak self] in
-                guard let self = self, self.isTreoActive else { return }
+            for delay in [0.0, 0.5, 2.0] {
+                audioQueue.asyncAfter(deadline: .now() + delay) { [weak self] in
+                    guard let self = self, self.isTreoActive else { return }
+                    if self.audioPlayer?.isPlaying != true {
+                        self.setupAudioSession()
+                        self.startFallbackAudioPlayer()
+                    }
+                }
+            }
+        }
+    }
+
+    @objc private func handleSecondaryAudioHint(_ notification: Notification) {
+        guard isTreoActive else { return }
+        audioQueue.async { [weak self] in
+            guard let self = self, self.isTreoActive else { return }
+            self.setupAudioSession()
+            if self.audioPlayer?.isPlaying != true {
+                self.startFallbackAudioPlayer()
+            }
+        }
+    }
+
+    @objc private func handleProtectedDataAvailable() {
+        guard isTreoActive else { return }
+        audioQueue.async { [weak self] in
+            guard let self = self, self.isTreoActive else { return }
+            if self.audioPlayer?.isPlaying != true {
                 self.setupAudioSession()
                 self.startFallbackAudioPlayer()
             }
@@ -865,11 +928,13 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    /// Watchdog tần số thấp (10 giây/lần = 0.1 wakeup/giây) đảm bảo keepalive luôn chạy xuyên suốt.
+    private var lastNowPlayingRefresh: TimeInterval = 0
+
+    /// Watchdog mỗi 5 giây (đối chiếu J2ME NST) đảm bảo âm thanh nền + socket + background task chạy xuyên màn đêm không ngắt.
     private func startWatchdog() {
         guard watchdogTimer == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        timer.schedule(deadline: .now() + 10.0, repeating: 10.0)
+        timer.schedule(deadline: .now() + 5.0, repeating: 5.0)
         timer.setEventHandler { [weak self] in
             guard let self = self, self.isTreoActive else { return }
 
@@ -881,6 +946,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                 guard let self = self, self.isTreoActive else { return }
                 if self.audioPlayer?.isPlaying != true {
                     print("[DecadeBackgroundKeeper] Watchdog: AudioPlayer not playing, resuming...")
+                    self.setupAudioSession()
                     self.startFallbackAudioPlayer()
                 }
             }
@@ -897,13 +963,16 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                 DecadeNetworkKeeper.shared.start()
             }
 
-            // 4. Bảo đảm Background Task Transition luôn có hiệu lực
-            if self.bgTaskID == .invalid {
-                self.beginAppBackgroundTask()
-            }
+            // 4. Gia hạn Background Task an toàn trên Main Thread nếu gần hết hạn hoặc chưa tạo
+            self.beginAppBackgroundTask()
 
-            DispatchQueue.main.async {
-                self.updateNowPlayingInfo()
+            // 5. Cập nhật NowPlaying mỗi 30 giây để giữ MediaPlayback Priority mà không làm hao pin XPC
+            let now = Date().timeIntervalSince1970
+            if (now - self.lastNowPlayingRefresh) >= 30.0 {
+                self.lastNowPlayingRefresh = now
+                DispatchQueue.main.async {
+                    self.updateNowPlayingInfo()
+                }
             }
         }
         timer.resume()

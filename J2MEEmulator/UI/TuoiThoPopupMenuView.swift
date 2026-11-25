@@ -18,12 +18,15 @@ final class TuoiThoPopupMenuView: UIView {
     var onToggleKeyboardVisibility: (() -> Void)?
     var onOpenNativeKeyboard: (() -> Void)?
     var onToggleSplitView: (() -> Void)?
+    var onOledSleepMode: (() -> Void)?
+    var onHideApp: (() -> Void)?
     var onRestartGame: (() -> Void)?
     var onBackToList: (() -> Void)?
     var onExitGame: (() -> Void)?
 
     private let backdropView = UIView()
     private let cardView = UIView()
+    private let scrollView = UIScrollView()
     private let contentStack = UIStackView()
     private var isDismissing = false
 
@@ -65,11 +68,22 @@ final class TuoiThoPopupMenuView: UIView {
         cardView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(cardView)
 
+        // Scrollable container so menu never clips on compact or landscape screens
+        scrollView.showsVerticalScrollIndicator = true
+        scrollView.alwaysBounceVertical = false
+        scrollView.layer.cornerRadius = 16
+        scrollView.clipsToBounds = true
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        cardView.addSubview(scrollView)
+
         // Stack View for Rows
         contentStack.axis = .vertical
         contentStack.spacing = 0
         contentStack.translatesAutoresizingMaskIntoConstraints = false
-        cardView.addSubview(contentStack)
+        scrollView.addSubview(contentStack)
+
+        let matchContentHeight = scrollView.heightAnchor.constraint(equalTo: contentStack.heightAnchor)
+        matchContentHeight.priority = .defaultLow
 
         NSLayoutConstraint.activate([
             backdropView.topAnchor.constraint(equalTo: topAnchor),
@@ -77,14 +91,23 @@ final class TuoiThoPopupMenuView: UIView {
             backdropView.trailingAnchor.constraint(equalTo: trailingAnchor),
             backdropView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            contentStack.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 6),
-            contentStack.leadingAnchor.constraint(equalTo: cardView.leadingAnchor),
-            contentStack.trailingAnchor.constraint(equalTo: cardView.trailingAnchor),
-            contentStack.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -6),
+            scrollView.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 4),
+            scrollView.leadingAnchor.constraint(equalTo: cardView.leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: cardView.trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -4),
 
-            cardView.widthAnchor.constraint(equalToConstant: 220),
+            contentStack.topAnchor.constraint(equalTo: scrollView.contentLayoutGuide.topAnchor),
+            contentStack.leadingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.leadingAnchor),
+            contentStack.trailingAnchor.constraint(equalTo: scrollView.contentLayoutGuide.trailingAnchor),
+            contentStack.bottomAnchor.constraint(equalTo: scrollView.contentLayoutGuide.bottomAnchor),
+            contentStack.widthAnchor.constraint(equalTo: scrollView.frameLayoutGuide.widthAnchor),
+
+            matchContentHeight,
+
+            cardView.widthAnchor.constraint(equalToConstant: 232),
             cardView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-            cardView.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 48)
+            cardView.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 48),
+            cardView.bottomAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.bottomAnchor, constant: -12)
         ])
 
         buildMenuItems()
@@ -163,6 +186,24 @@ final class TuoiThoPopupMenuView: UIView {
             action: #selector(handleToggleSplitView)
         )
         contentStack.addArrangedSubview(btnSplit)
+
+        // 4d. Ngủ Ẩn / Treo Màn Đen OLED (Moon icon tím đậm)
+        let btnOledSleep = makeMenuItem(
+            iconName: "moon.zzz.fill",
+            iconColor: UIColor(red: 0.35, green: 0.28, blue: 0.78, alpha: 1.0),
+            title: "Ngủ Ẩn (Tắt Màn Đen)",
+            action: #selector(handleOledSleep)
+        )
+        contentStack.addArrangedSubview(btnOledSleep)
+
+        // 4e. Ẩn Ứng Dụng chạy ngầm (giống J2ME NST HideApp)
+        let btnHideApp = makeMenuItem(
+            iconName: "eye.slash.circle.fill",
+            iconColor: UIColor(red: 0.08, green: 0.56, blue: 0.46, alpha: 1.0),
+            title: "Ẩn Ứng Dụng (Chạy Ngầm)",
+            action: #selector(handleHideApp)
+        )
+        contentStack.addArrangedSubview(btnHideApp)
 
         // 5. Khởi Động Lại (Refresh icon tím)
         let btnRestart = makeMenuItem(
@@ -313,6 +354,18 @@ final class TuoiThoPopupMenuView: UIView {
     @objc private func handleToggleSplitView() {
         dismissMenu { [weak self] in
             self?.onToggleSplitView?()
+        }
+    }
+
+    @objc private func handleOledSleep() {
+        dismissMenu { [weak self] in
+            self?.onOledSleepMode?()
+        }
+    }
+
+    @objc private func handleHideApp() {
+        dismissMenu { [weak self] in
+            self?.onHideApp?()
         }
     }
 

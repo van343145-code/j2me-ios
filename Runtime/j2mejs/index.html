@@ -1,0 +1,177 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-eval'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob: data:; font-src 'self' data:; worker-src 'self' blob:; frame-src 'none'; form-action 'none'; base-uri 'none'">
+  <meta name="viewport" content="width=device-width, user-scalable=no, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden; position: fixed;
+      background: #000;
+    }
+
+    /* Canvas fills entire viewport */
+    #display-container, #display, #drawer, #main {
+      width: 100%; height: 100%;
+      position: absolute; top: 0; left: 0;
+      background: #000;
+    }
+    #canvas {
+      display: block;
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%; height: 100%;
+      background: #000;
+      image-rendering: pixelated;
+      touch-action: none;
+    }
+
+    /* Engine-required elements: hidden but present in DOM */
+    .engine-hidden { display: none !important; }
+
+    /* Nokia TextEditor fields appear at positions supplied by the runtime. */
+    #main2 { position: absolute; inset: 0; z-index: 101; pointer-events: none; }
+    #main2 .text-editor {
+      display: none; position: absolute; font: 1rem -apple-system, sans-serif;
+      white-space: pre-wrap; overflow-wrap: anywhere;
+    }
+    #main2 .text-editor.show {
+      display: block; pointer-events: auto; overflow: auto; touch-action: auto;
+      border: 0; background: #fff; color: #000;
+    }
+    #main2 #hidden-textarea-editor {
+      display: block; visibility: hidden; pointer-events: none;
+    }
+
+    #midlet-selector-screen {
+      position: absolute; inset: 0; z-index: 120; flex-direction: column;
+      gap: 0.75rem; padding: 1rem; background: #111216; color: #fff;
+      font: 1rem -apple-system, sans-serif;
+    }
+    .midlet-selector-list { min-height: 0; overflow-y: auto; touch-action: pan-y; }
+    .midlet-selector-item {
+      display: flex; gap: 0.75rem; align-items: center; margin-bottom: 0.5rem;
+      padding: 0.7rem; border: 1px solid #484a50; border-radius: 0.5rem;
+    }
+    .midlet-selector-item--focused { border-color: #82b9ff; background: #223248; }
+    .midlet-info { min-width: 0; overflow-wrap: anywhere; }
+    .midlet-class { color: #c0c3cc; font-size: 0.8rem; }
+
+    /* Game dialogs (lcdui-alert, textbox etc.) need to show when game triggers them */
+    form[role="dialog"][data-type="confirm"] {
+      background: #2d2d2d; overflow: hidden; position: absolute;
+      z-index: 102; top: 0; left: 0; right: 0; bottom: 0;
+      padding-bottom: 7rem; font-size: 0; color: #fff; text-align: left;
+    }
+    form[role="dialog"][data-type="confirm"] > section {
+      font-weight: 300; font-size: 2.2rem; color: #FAFAFA;
+      padding: 0 1.5rem; width: 100%; display: inline-block;
+      overflow-y: scroll; max-height: 100%; vertical-align: middle; white-space: normal;
+    }
+    form[role="dialog"][data-type="confirm"] h1 {
+      font-weight: normal; font-size: 1.6rem; line-height: 1.5em;
+      color: #fff; margin: 0; padding: 1rem 1.5rem 0;
+    }
+    form[role="dialog"][data-type="confirm"] menu {
+      white-space: nowrap; margin: 0; padding: 1.5rem; background: #4d4d4d;
+      display: block; overflow: hidden; position: absolute; left: 0; right: 0; bottom: 0;
+    }
+    form[role="dialog"][data-type="confirm"] menu button {
+      font-family: sans-serif; font-style: italic; width: calc((100% - 1rem) / 2);
+      height: 4rem; margin: 0; padding: 0 1.2rem; display: inline-block;
+      vertical-align: middle; text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+      background: #d8d8d8; border: none; border-radius: 2rem;
+      font-weight: normal; font-size: 1.6rem; line-height: 4rem;
+      color: #333; text-align: center; outline: none;
+    }
+    form[role="dialog"][data-type="confirm"] menu button.recommend { background-color: #00caf2; color: #fff; }
+    form[role="dialog"][data-type="confirm"] menu button:last-child { margin-left: 1rem; }
+    form[role="dialog"][data-type="confirm"] p {
+      word-wrap: break-word; margin: 1rem 0 0; padding: 1rem 1.5rem;
+      border-top: 0.1rem solid #686868; line-height: 3rem;
+    }
+  </style>
+
+  <script src="js/nsv-touch.js"></script>
+
+  <script type="text/javascript" src="./js/rawinflate.js" defer></script>
+  <script src="./js/encoding.js"></script>
+  <script src="./js/webaudio-tinysynth.min.js" type="text/javascript"></script>
+  <script src="./js/BenzAMRRecorder.min.js" type="text/javascript"></script>
+  <script src="./js/midiplayer.js" type="text/javascript" defer></script>
+  <script type="text/javascript" src="bld/native.js" defer></script>
+  <script type="text/javascript" src="config/default.js" defer></script>
+  <script type="text/javascript" src="config/build.js" defer></script>
+  <script type="text/javascript" src="config/urlparams.js" defer></script>
+  <script type="text/javascript" src="config/ios-override.js" defer></script>
+  <script type="text/javascript" src="bld/j2me.js" defer></script>
+  <script type="text/javascript" src="bld/main-all.js" defer></script>
+  <script type="text/javascript" src="keymap.js"></script>
+  <script type="text/javascript" src="./js/jszip.min.js"></script>
+
+  <!-- Network bridge for J2meJS evalNative - must be before main-all.js runs -->
+  <script src="js/nsv-network.js"></script>
+</head>
+
+<body>
+  <!-- Game display, input fields, and engine overlays. -->
+  <div id="display-container">
+    <div id="display">
+      <section id="sidebar" data-type="sidebar" class="engine-hidden"><header><h1>Menu</h1></header><nav><ul></ul></nav></section>
+      <section id="drawer" role="region">
+        <header class="engine-hidden">
+          <a href="#"><span class="icon icon-menu"></span></a>
+          <a id="header-drawer-button" href="#drawer"><span class="icon icon-menu"></span></a>
+          <menu id="header-ok-button" type="toolbar"><button>OK</button></menu>
+          <h1 id="display_title"></h1>
+        </header>
+        <div id="main" role="main">
+          <canvas id="canvas"></canvas>
+          <div id="main2">
+            <input id="password-editor" class="text-editor" type="password">
+            <input id="tel-editor" class="text-editor" type="tel">
+            <input id="number-editor" class="text-editor" type="text" inputmode="decimal">
+            <input id="email-editor" class="text-editor" type="text" inputmode="email" autocapitalize="none" spellcheck="false">
+            <input id="url-editor" class="text-editor" type="url">
+            <div id="textarea-editor" class="text-editor" contenteditable="true"></div>
+            <div id="hidden-textarea-editor" class="text-editor" aria-hidden="true"></div>
+            <button id="back-button" class="engine-hidden">Back</button>
+          </div>
+        </div>
+      </section>
+
+      <div id="download-screen" class="screen engine-hidden"></div>
+      <div id="splash-screen" class="screen engine-hidden"></div>
+      <div id="exit-screen" class="screen engine-hidden"></div>
+
+      <form role="dialog" data-type="confirm" class="lcdui-alert" id="lcdui-alert" style="display:none">
+        <section><h1 class="title"></h1><p class="text"></p><p style="border-top:0"><progress style="display:none"></progress></p></section>
+        <menu><button class="button0" style="display:none"></button><button class="button1" style="display:none"></button></menu>
+      </form>
+      <form role="dialog" data-type="confirm" class="lcdui-textbox" id="lcdui-textbox" style="display:none">
+        <section><h1 class="title"></h1><p><input type="text" class="textbox-input" style="width:100%;padding:5px;"></p></section>
+        <menu><button class="button0" style="display:none"></button><button class="button1" style="display:none"></button></menu>
+      </form>
+      <form role="dialog" data-type="confirm" class="sms-listener-prompt" id="sms-listener-prompt" style="display:none">
+        <section><h1>SMS</h1><p class="verificationText"></p><input type="text"><p class="timeLeft"></p><progress class="timeLeftBar" value="0" max="100"></progress></section>
+        <menu><button class="cancel">Cancel</button><button class="recommend">Done</button></menu>
+      </form>
+      <form role="dialog" data-type="confirm" class="nokia-fileui-prompt" id="nokia-fileui-prompt" style="display:none">
+        <section><h1>Select a file</h1><p><input type="file" name="nokia-fileui-file"></p></section>
+        <menu><button class="cancel">Cancel</button><button class="recommend">Done</button></menu>
+      </form>
+    </div>
+  </div>
+
+  <div id="keypad" class="gamepad-0 engine-hidden"><div id="joypad"></div><div id="numpad"></div></div>
+  <input id="File" type="file" class="engine-hidden">
+
+  <div id="midlet-selector-screen" style="display:none" role="dialog" aria-labelledby="midlet-selector-title">
+    <strong id="midlet-selector-title">Chọn chương trình</strong>
+    <div class="midlet-selector-list" role="listbox" aria-labelledby="midlet-selector-title"></div>
+  </div>
+  <script src="js/nsv-runtime.js"></script>
+</body>
+</html>

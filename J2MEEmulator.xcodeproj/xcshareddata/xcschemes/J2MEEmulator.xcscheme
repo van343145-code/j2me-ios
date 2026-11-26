@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "8A8184DD2F6C9DD500E5A952"
-               BuildableName = "JarBox.app"
+               BuildableName = "J2ME NSV.app"
                BlueprintName = "J2MEEmulator"
                ReferencedContainer = "container:J2MEEmulator.xcodeproj">
             </BuildableReference>
@@ -39,14 +39,13 @@
       ignoresPersistentStateOnLaunch = "NO"
       debugDocumentVersioning = "YES"
       debugServiceExtension = "internal"
-      enableGPUFrameCaptureMode = "2"
       allowLocationSimulation = "YES">
       <BuildableProductRunnable
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "8A8184DD2F6C9DD500E5A952"
-            BuildableName = "JarBox.app"
+            BuildableName = "J2ME NSV.app"
             BlueprintName = "J2MEEmulator"
             ReferencedContainer = "container:J2MEEmulator.xcodeproj">
          </BuildableReference>
@@ -63,7 +62,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "8A8184DD2F6C9DD500E5A952"
-            BuildableName = "JarBox.app"
+            BuildableName = "J2ME NSV.app"
             BlueprintName = "J2MEEmulator"
             ReferencedContainer = "container:J2MEEmulator.xcodeproj">
          </BuildableReference>

@@ -321,16 +321,29 @@
       config.midletClassName = className;
       applyGameScreen(MIDP.manifest, screenSize, rotation);
       var root = document.documentElement;
-      var observer = new MutationObserver(function() {
-        if (!root.classList.contains('app-keypad-ready')) return;
+      var gameReadySent = false;
+      function notifyGameReady() {
+        if (gameReadySent) return;
+        gameReadySent = true;
         observer.disconnect();
+        clearTimeout(readyFallback);
         postBridgeMessage({ type: 'gameReady' });
+      }
+      var observer = new MutationObserver(function() {
+        if (root.classList.contains('app-keypad-ready')) notifyGameReady();
       });
       observer.observe(root, { attributes: true, attributeFilter: ['class'] });
+      var readyFallback = setTimeout(function() {
+        notifyGameReady();
+      }, 2800);
       try {
         jvm.startIsolate0(config.main, config.args);
+        if (root.classList.contains('app-keypad-ready')) {
+          notifyGameReady();
+        }
       } catch (error) {
         observer.disconnect();
+        clearTimeout(readyFallback);
         throw error;
       }
     }
@@ -879,7 +892,90 @@
       keyUp: function(key) {
         var code = _keyCodeMap[key];
         if (typeof MIDP !== 'undefined' && pressedNativeKeys.delete(code)) MIDP.sendKeyRelease(code);
+      },
+      rawKeyDown: function(code) {
+        if (typeof code !== 'number' || typeof MIDP === 'undefined') return;
+        if (handleNativeMenuKey(String(code), code)) return;
+        if (pressedNativeKeys.has(code)) return;
+        pressedNativeKeys.add(code);
+        MIDP.sendKeyPress(code);
+      },
+      rawKeyUp: function(code) {
+        if (typeof code !== 'number' || typeof MIDP === 'undefined') return;
+        if (pressedNativeKeys.delete(code)) MIDP.sendKeyRelease(code);
+      },
+      rawKeyRepeat: function(code) {
+        if (typeof code !== 'number' || typeof MIDP === 'undefined') return;
+        if (typeof MIDP.sendKeyRepeat === 'function') {
+          MIDP.sendKeyRepeat(code);
+        } else {
+          MIDP.sendKeyRelease(code);
+          MIDP.sendKeyPress(code);
+        }
+      },
+      releaseAll: function() {
+        if (typeof MIDP === 'undefined') { pressedNativeKeys.clear(); return; }
+        pressedNativeKeys.forEach(function(code) {
+          try { MIDP.sendKeyRelease(code); } catch(e) {}
+        });
+        pressedNativeKeys.clear();
       }
+    };
+
+    // FPS limit & background throttle (matching J2ME NST cool-running defaults)
+    var _nstFpsLimit = 30;
+    var _nstInBackground = false;
+    var _nstFilter = false;
+    (function hookRafThrottle() {
+      var origRAF = window.requestAnimationFrame;
+      if (typeof origRAF !== 'function') return;
+      var lastFrame = 0;
+      window.requestAnimationFrame = function(cb) {
+        var limit = _nstInBackground ? 4 : _nstFpsLimit;
+        if (!limit || limit <= 0 || limit >= 60) {
+          return origRAF.call(window, cb);
+        }
+        var minGap = 1000 / limit;
+        var now = performance.now();
+        var wait = Math.max(0, minGap - (now - lastFrame));
+        if (wait <= 1) {
+          lastFrame = now;
+          return origRAF.call(window, cb);
+        }
+        return setTimeout(function() {
+          lastFrame = performance.now();
+          origRAF.call(window, cb);
+        }, wait);
+      };
+    })();
+
+    window.nstApplyConfig = function(opts) {
+      if (!opts || typeof opts !== 'object') return;
+      if (typeof opts.fpsLimit === 'number') {
+        _nstFpsLimit = Math.max(0, Math.min(opts.fpsLimit, 120));
+      }
+      if (typeof opts.filter === 'boolean') {
+        _nstFilter = opts.filter;
+        var c = document.getElementById('canvas');
+        if (c) c.style.imageRendering = _nstFilter ? 'auto' : 'pixelated';
+      }
+      if (typeof opts.touchEnabled === 'boolean') {
+        var c2 = document.getElementById('canvas');
+        if (c2) c2.style.pointerEvents = opts.touchEnabled ? 'auto' : 'none';
+      }
+      if (typeof opts.scaleMode === 'string') {
+        scaleModeSet = true;
+        _scaleMode = opts.scaleMode === 'stretch' ? 'stretch' : 'fit';
+      }
+      if (typeof opts.width === 'number' && typeof opts.height === 'number' && opts.width >= 64 && opts.height >= 64) {
+        _setScreenSize(opts.width, opts.height);
+      } else {
+        safeApply();
+      }
+    };
+
+    window.nstSetBackground = function(bg) {
+      _nstInBackground = !!bg;
     };
 
     var _isTextEditing = false;

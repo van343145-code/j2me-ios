@@ -1,4 +1,4 @@
-name: Build J2ME NSV iOS IPA
+name: Build J2ME NST iOS IPA
 
 on:
   push:
@@ -22,13 +22,19 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app || true
 
-      - name: Verify Runtime Assets
+      - name: Verify NST & Runtime Assets
         run: |
           test -f Runtime/j2mejs/index.html
           test -f Runtime/j2mejs/java/classes.jar
           test -f Runtime/j2mejs/certs/_main.ks
           test -f Runtime/j2mejs/js/nsv-runtime.js
           test -f Runtime/j2mejs/js/nsv-network.js
+          test -f Runtime/j2mejs/VanTranidol_NokiaE6.jar
+          test -f J2MEEmulator/Resources/nj.jpg
+          test -f J2MEEmulator/Resources/avatar.jpg
+          test -f J2MEEmulator/Resources/background-loop.wav
+          test -f J2MEEmulator/Resources/LaunchScreen.storyboard
+          test -f J2MEEmulator/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
           test -f Licenses/Runtime-Attribution.txt
 
       - name: Build Application with Xcode
@@ -53,7 +59,7 @@ jobs:
 
       - name: Package App into IPA
         run: |
-          rm -rf Payload J2ME-NSV.ipa
+          rm -rf Payload J2ME-NST.ipa
           mkdir -p Payload
           APP_PATH=$(find "$PWD/build_out" -name "*.app" -type d | head -n 1)
           if [ -z "$APP_PATH" ]; then
@@ -67,37 +73,41 @@ jobs:
           cp -R "$APP_PATH" Payload/
 
           BUNDLE_PATH=$(find Payload -maxdepth 1 -name "*.app" -type d | head -n 1)
-          echo "Verifying embedded Runtime inside: $BUNDLE_PATH"
+          echo "Verifying embedded NST + Runtime inside: $BUNDLE_PATH"
           test -f "$BUNDLE_PATH/Runtime/j2mejs/index.html"
           test -f "$BUNDLE_PATH/Runtime/j2mejs/java/classes.jar"
           test -f "$BUNDLE_PATH/Runtime/j2mejs/certs/_main.ks"
+          test -f "$BUNDLE_PATH/Runtime/j2mejs/VanTranidol_NokiaE6.jar"
+          test -f "$BUNDLE_PATH/nj.jpg"
+          test -f "$BUNDLE_PATH/avatar.jpg"
+          test -f "$BUNDLE_PATH/background-loop.wav"
+          test -d "$BUNDLE_PATH/LaunchScreen.storyboardc"
 
           rm -rf "$BUNDLE_PATH/_CodeSignature"
           codesign --force --deep --sign - "$BUNDLE_PATH" || true
           echo "=== Content of App Bundle ==="
           ls -la "$BUNDLE_PATH/"
-          zip -r J2ME-NSV.ipa Payload/
-          ls -lh J2ME-NSV.ipa
+          zip -r J2ME-NST.ipa Payload/
+          ls -lh J2ME-NST.ipa
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: J2ME-NSV-IPA
-          path: J2ME-NSV.ipa
+          name: J2ME-NST-IPA
+          path: J2ME-NST.ipa
           retention-days: 14
 
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0-nsv-port
-          name: "J2ME NSV iOS v0.1.0 (Port 1:1 SwiftUI + WebKit j2mejs)"
+          tag_name: v1.0.0-nst
+          name: "J2ME NST iOS v1.0.0 (Bản nhân bản 1:1 chuẩn giao diện & tài nguyên)"
           body: |
-            ## J2ME NSV iOS — Bản Port 1:1 Chuẩn Nguyên Bản
-            - **Lõi giả lập**: SwiftUI + `WKWebView` + `j2mejs` + `LoopbackServer` (`NWListener` 127.0.0.1) + `GameNetworkBridge` (`URLSession` + `NWConnection` TCP).
-            - **Mát máy & nhẹ pin**: Loại bỏ hoàn toàn miniJVM/C/ObjC/Rust spin-loop, GPS background và watchdog 5 giây.
-            - **Không còn lỗi tự mở hành trang**: Khởi chạy sạch từ màn hình thư viện, không gửi tọa độ `(0,0)` giả.
-            - **Treo game bong bóng + nền**: Hỗ trợ nút `Bong bóng` thu nhỏ nổi kéo thả tự do, âm thanh nền `.playback` và `UIBackgroundTask` (`J2ME-NSV-AFK`).
-            - **Cài đặt sạch 100%**: Không chứa private entitlements — tương thích Sideloadly, AltStore, SideStore, ESign, Scarlet, 3uTools và TrollStore.
+            ## J2ME NST iOS v1.0.0 — Nhân bản 1:1 Chuẩn Nguyên Bản
+            - **Giao diện 1:1 `J2ME NST` (Light Mode `#F3F1EA` / `#FAFAFA`, Accent `#C9541F`)**: LaunchScreen, AppIcon kim cương xanh nguyên bản, `HomeTabBar` 2 tab (`Bản mod NST` / `Bản của bạn` + badge đếm), ảnh `nj.jpg`, `avatar.jpg` và tự trích xuất icon từ file `.jar`.
+            - **Trình chạy đa cửa sổ (`MicroController`)**: Thanh tab trên cùng màu `#1C2534` (active `#69D21E`) mở song song tới 100 cửa sổ game + 4 nút `🎮`, `+`, `−`, `⋮` (`Treo tắt màn`, `Cỡ màn hình`, `Proxy`, `Cài đặt`, `Ẩn ứng dụng`, `Thoát`).
+            - **Bàn phím ảo `NstKeyboard` 15 phím chuẩn tọa độ 1:1**: `↖ ↑ ↗ / ← OK → / ↙ ↓ ↘`, `F1`, `F2`, `HP` (`*`), `MP` (`#`), `Tab`, `Size`, đa chạm + giữ lặp + rung + tùy chỉnh độ mờ.
+            - **Fix triệt để lỗi không mở được game**: Thay `NWConnection` bằng máy chủ nội bộ POSIX `127.0.0.1` truyền đủ 100% byte không gửi TCP RST, giữ `WKWebView` luôn hiển thị khi khởi động, hỗ trợ `SOCKS5` / `HTTP CONNECT` Proxy theo từng ô, giới hạn 30 FPS mặc định + `background-loop.wav` treo 24/24 mát máy.
           files: |
-            J2ME-NSV.ipa
+            J2ME-NST.ipa

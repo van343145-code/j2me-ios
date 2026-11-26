@@ -6,14 +6,19 @@ import WebKit
 final class GameNetworkBridge {
     private final class Socket {
         let token = UUID()
-        let connection: NWConnection
-        var timeout: Task<Void, Never>?
+        let host: String
+        let port: Int
+        let timeoutMs: Int
+        var connection: NWConnection?
+        var dialTask: Task<Void, Never>?
         var started = false
         var ready = false
         var pendingBytes = 0
 
-        init(connection: NWConnection) {
-            self.connection = connection
+        init(host: String, port: Int, timeoutMs: Int) {
+            self.host = host
+            self.port = port
+            self.timeoutMs = timeoutMs
         }
     }
 
@@ -25,12 +30,8 @@ final class GameNetworkBridge {
     private static let allowedSchemes = ["http", "https"]
     private static let allowedMethods = ["GET", "HEAD", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"]
     private static let blockedHeaders = [
-        "connection",
-        "content-length",
-        "host",
-        "proxy-authorization",
-        "transfer-encoding",
-        "upgrade",
+        "connection", "content-length", "host",
+        "proxy-authorization", "transfer-encoding", "upgrade",
     ]
     private static let headerNameAllowed = CharacterSet(
         charactersIn: "!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
@@ -49,18 +50,29 @@ final class GameNetworkBridge {
     private static let socketReadChunkBytes = 65536
 
     private weak var webView: WKWebView?
+    private let proxyProvider: @MainActor () -> ProxyInfo?
     private let http: URLSession
     private var requests: [String: Task<Void, Never>] = [:]
     private var sockets: [String: Socket] = [:]
 
-    init(webView: WKWebView) {
+    init(webView: WKWebView, proxyProvider: @escaping @MainActor () -> ProxyInfo? = { nil }) {
         self.webView = webView
+        self.proxyProvider = proxyProvider
         let config = URLSessionConfiguration.ephemeral
         config.httpShouldSetCookies = false
         config.urlCache = nil
         config.timeoutIntervalForRequest = 15.0
         config.timeoutIntervalForResource = 30.0
         self.http = URLSession(configuration: config)
+    }
+
+    func disconnectSockets() {
+        let ids = Array(sockets.keys)
+        for id in ids {
+            if let s = sockets[id] {
+                finishSocket(id, token: s.token, event: "close")
+            }
+        }
     }
 
     func close() {
@@ -70,9 +82,9 @@ final class GameNetworkBridge {
         requests.removeAll()
 
         for socket in sockets.values {
-            socket.timeout?.cancel()
-            socket.connection.stateUpdateHandler = nil
-            socket.connection.cancel()
+            socket.dialTask?.cancel()
+            socket.connection?.stateUpdateHandler = nil
+            socket.connection?.cancel()
         }
         sockets.removeAll()
 
@@ -107,7 +119,6 @@ final class GameNetworkBridge {
               id.hasPrefix(prefix) else {
             return nil
         }
-
         let suffix = id.utf8.dropFirst(prefix.utf8.count)
         guard !suffix.isEmpty, suffix.allSatisfy({ $0 >= 48 && $0 <= 57 }) else {
             return nil
@@ -115,12 +126,13 @@ final class GameNetworkBridge {
         return id
     }
 
+    // MARK: - HTTP Requests
+
     private func request(_ id: String, data: [String: Any]) {
         guard requests[id] == nil, requests.count < Self.maxConcurrentRequests else {
             finishRequest(id, result: nil)
             return
         }
-
         guard let urlRequest = makeRequest(data) else {
             finishRequest(id, result: nil)
             return
@@ -160,16 +172,12 @@ final class GameNetworkBridge {
               let scheme = components.scheme?.lowercased(),
               Self.allowedSchemes.contains(scheme),
               let host = components.host, !host.isEmpty,
-              components.user == nil,
-              components.password == nil,
               let url = components.url else {
             return nil
         }
 
         let method = ((data["method"] as? String) ?? "GET").uppercased()
-        guard Self.allowedMethods.contains(method) else {
-            return nil
-        }
+        guard Self.allowedMethods.contains(method) else { return nil }
 
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15.0)
         request.httpMethod = method
@@ -184,11 +192,7 @@ final class GameNetworkBridge {
                       !value.unicodeScalars.contains(where: { $0 == "\r" || $0 == "\n" || $0.value == 0 }) else {
                     return nil
                 }
-
-                let lower = name.lowercased()
-                if Self.blockedHeaders.contains(lower) {
-                    continue
-                }
+                if Self.blockedHeaders.contains(name.lowercased()) { continue }
                 request.setValue(value, forHTTPHeaderField: name)
             }
         }
@@ -203,13 +207,10 @@ final class GameNetworkBridge {
                 }
                 request.httpBody = decoded
             } else {
-                guard bodyString.utf8.count <= Self.maxRequestBodyBytes else {
-                    return nil
-                }
+                guard bodyString.utf8.count <= Self.maxRequestBodyBytes else { return nil }
                 request.httpBody = Data(bodyString.utf8)
             }
         }
-
         return request
     }
 
@@ -240,69 +241,36 @@ final class GameNetworkBridge {
                 }
             }
         }
-
         return HTTPResult(statusCode: httpResponse.statusCode, data: buffer.base64EncodedString())
     }
 
+    // MARK: - TCP Sockets (Direct or via Assigned SOCKS5 / HTTP Proxy)
+
     private func validSocketHost(_ host: String) -> Bool {
-        guard !host.isEmpty, host.utf8.count <= 253 else {
-            return false
-        }
-        if IPv6Address(host) != nil {
-            return true
-        }
-        return host.utf8.allSatisfy { byte in
-            (byte >= 48 && byte <= 57) ||
-            (byte >= 65 && byte <= 90) ||
-            (byte >= 97 && byte <= 122) ||
-            byte == 45 || byte == 46
+        guard !host.isEmpty, host.utf8.count <= 253 else { return false }
+        if IPv6Address(host) != nil { return true }
+        return host.utf8.allSatisfy { b in
+            (b >= 48 && b <= 57) || (b >= 65 && b <= 90) || (b >= 97 && b <= 122) || b == 45 || b == 46
         }
     }
 
     private func prepareSocket(_ id: String, data: [String: Any]) {
-        guard sockets[id] == nil, sockets.count < Self.maxConcurrentSockets else {
-            return
-        }
-
-        guard let host = data["host"] as? String,
-              validSocketHost(host) else {
-            return
-        }
+        guard sockets[id] == nil, sockets.count < Self.maxConcurrentSockets else { return }
+        guard let host = data["host"] as? String, validSocketHost(host) else { return }
 
         let portInt: Int
-        if let intVal = data["port"] as? Int {
-            portInt = intVal
-        } else if let numVal = data["port"] as? NSNumber {
-            portInt = numVal.intValue
-        } else {
-            return
-        }
-
-        guard portInt >= 1 && portInt <= 65535,
-              let port = NWEndpoint.Port(rawValue: UInt16(portInt)) else {
-            return
-        }
-
-        let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
-        let socket = Socket(connection: connection)
-        sockets[id] = socket
+        if let v = data["port"] as? Int { portInt = v }
+        else if let n = data["port"] as? NSNumber { portInt = n.intValue }
+        else { return }
+        guard (1...65535).contains(portInt) else { return }
 
         let rawTimeout: Int
-        if let t = data["timeout"] as? Int {
-            rawTimeout = t
-        } else if let n = data["timeout"] as? NSNumber {
-            rawTimeout = n.intValue
-        } else {
-            rawTimeout = 5000
-        }
-        let clampedMs = min(max(rawTimeout, 1000), 12000)
-        let token = socket.token
+        if let t = data["timeout"] as? Int { rawTimeout = t }
+        else if let n = data["timeout"] as? NSNumber { rawTimeout = n.intValue }
+        else { rawTimeout = 8000 }
+        let clampedMs = min(max(rawTimeout, 2000), 15000)
 
-        socket.timeout = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(clampedMs) * 1_000_000)
-            guard !Task.isCancelled else { return }
-            self?.finishSocket(id, token: token, event: "error")
-        }
+        sockets[id] = Socket(host: host, port: portInt, timeoutMs: clampedMs)
     }
 
     private func startSocket(_ id: String) {
@@ -310,44 +278,65 @@ final class GameNetworkBridge {
             emitSocket(id, event: "error", data: "", terminal: true)
             return
         }
-
         guard !socket.started else { return }
         socket.started = true
-        let token = socket.token
 
-        socket.connection.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor [weak self] in
+        let token = socket.token
+        let host = socket.host
+        let port = socket.port
+        let timeoutMs = socket.timeoutMs
+        let proxy = proxyProvider()
+
+        socket.dialTask = Task { [weak self] in
+            do {
+                let conn = try await ProxyDialer.dial(
+                    targetHost: host,
+                    targetPort: port,
+                    proxy: proxy,
+                    timeoutMs: timeoutMs
+                )
+                guard !Task.isCancelled else {
+                    conn.cancel()
+                    return
+                }
                 guard let self,
                       let current = self.sockets[id],
                       current.token == token else {
+                    conn.cancel()
                     return
                 }
+                current.connection = conn
+                current.ready = true
 
-                switch state {
-                case .ready:
-                    current.timeout?.cancel()
-                    current.timeout = nil
-                    guard !current.ready else { return }
-                    current.ready = true
-                    self.emitSocket(id, event: "connect", data: "", terminal: false)
-                    self.receive(id, token: token)
-                case .failed:
-                    self.finishSocket(id, token: token, event: "error")
-                case .cancelled:
-                    self.finishSocket(id, token: token, event: current.ready ? "close" : "error")
-                default:
-                    break
+                conn.stateUpdateHandler = { [weak self] state in
+                    Task { @MainActor [weak self] in
+                        guard let self,
+                              let cur = self.sockets[id],
+                              cur.token == token else { return }
+                        switch state {
+                        case .failed:
+                            self.finishSocket(id, token: token, event: "error")
+                        case .cancelled:
+                            self.finishSocket(id, token: token, event: cur.ready ? "close" : "error")
+                        default:
+                            break
+                        }
+                    }
                 }
+
+                self.emitSocket(id, event: "connect", data: "", terminal: false)
+                self.receive(id, token: token)
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.finishSocket(id, token: token, event: "error")
             }
         }
-
-        socket.connection.start(queue: .main)
     }
 
     private func receive(_ id: String, token: UUID) {
-        guard let socket = sockets[id], socket.token == token else { return }
+        guard let socket = sockets[id], socket.token == token, let conn = socket.connection else { return }
 
-        socket.connection.receive(minimumIncompleteLength: 1, maximumLength: Self.socketReadChunkBytes) { [weak self] content, _, isComplete, error in
+        conn.receive(minimumIncompleteLength: 1, maximumLength: Self.socketReadChunkBytes) { [weak self] content, _, isComplete, error in
             Task { @MainActor [weak self] in
                 guard let self,
                       let current = self.sockets[id],
@@ -395,6 +384,7 @@ final class GameNetworkBridge {
 
         if method == "write" {
             guard socket.ready,
+                  let conn = socket.connection,
                   let encoded = data["data"] as? String,
                   let payload = Data(base64Encoded: encoded) else {
                 finishSocket(id, token: token, event: "error")
@@ -410,7 +400,7 @@ final class GameNetworkBridge {
             let byteCount = payload.count
             socket.pendingBytes += byteCount
 
-            socket.connection.send(
+            conn.send(
                 content: payload,
                 contentContext: .defaultMessage,
                 isComplete: true,
@@ -434,10 +424,11 @@ final class GameNetworkBridge {
     private func finishSocket(_ id: String, token: UUID, event: String) {
         guard let socket = sockets[id], socket.token == token else { return }
         sockets.removeValue(forKey: id)
-        socket.timeout?.cancel()
-        socket.timeout = nil
-        socket.connection.stateUpdateHandler = nil
-        socket.connection.cancel()
+        socket.dialTask?.cancel()
+        socket.dialTask = nil
+        socket.connection?.stateUpdateHandler = nil
+        socket.connection?.cancel()
+        socket.connection = nil
         emitSocket(id, event: event, data: "", terminal: true)
     }
 

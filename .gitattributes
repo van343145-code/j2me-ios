@@ -1,0 +1,14 @@
+# Keep binary and embedded JS runtime assets byte-identical across Windows/macOS
+Runtime/** binary
+*.jar binary
+*.zip binary
+*.wav binary
+*.jpg binary
+*.png binary
+*.ks binary
+*.sf2 binary
+*.swift text eol=lf
+*.plist text eol=lf
+*.storyboard text eol=lf
+*.pbxproj text eol=lf
+*.yml text eol=lf

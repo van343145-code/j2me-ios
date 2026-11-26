@@ -108,7 +108,7 @@ final class AppListController: UITableViewController, UIDocumentPickerDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = "J2ME NST"
+        title = "jarNO1"
         view.backgroundColor = NstTheme.Apk.background
         tableView.backgroundColor = NstTheme.Apk.background
         tableView.separatorColor = NstTheme.Apk.divider

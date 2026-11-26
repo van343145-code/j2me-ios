@@ -12,7 +12,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		8A8184DE2F6C9DD500E5A952 /* J2ME NST.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "J2ME NST.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		8A8184DE2F6C9DD500E5A952 /* jarNO1.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = jarNO1.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BB000001BBBB000000000001 /* Runtime */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Runtime; sourceTree = "<group>"; };
 		BB000001BBBB000000000002 /* Licenses */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Licenses; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -63,7 +63,7 @@
 		8A8184DF2F6C9DD500E5A952 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				8A8184DE2F6C9DD500E5A952 /* J2ME NST.app */,
+				8A8184DE2F6C9DD500E5A952 /* jarNO1.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -89,8 +89,8 @@
 			name = J2MEEmulator;
 			packageProductDependencies = (
 			);
-			productName = "J2ME NST";
-			productReference = 8A8184DE2F6C9DD500E5A952 /* J2ME NST.app */;
+			productName = jarNO1;
+			productReference = 8A8184DE2F6C9DD500E5A952 /* jarNO1.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -168,16 +168,16 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.nst.j2me.ios";
-				PRODUCT_MODULE_NAME = J2ME_NST;
-				PRODUCT_NAME = "J2ME NST";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.jarno1.j2me.ios";
+				PRODUCT_MODULE_NAME = jarNO1;
+				PRODUCT_NAME = jarNO1;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
@@ -198,16 +198,16 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.nst.j2me.ios";
-				PRODUCT_MODULE_NAME = J2ME_NST;
-				PRODUCT_NAME = "J2ME NST";
+				PRODUCT_BUNDLE_IDENTIFIER = "com.jarno1.j2me.ios";
+				PRODUCT_MODULE_NAME = jarNO1;
+				PRODUCT_NAME = jarNO1;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
 				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = "1,2";
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Release;
 		};

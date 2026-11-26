@@ -33,7 +33,6 @@ jobs:
           test -f J2MEEmulator/Resources/nj.jpg
           test -f J2MEEmulator/Resources/avatar.jpg
           test -f J2MEEmulator/Resources/background-loop.wav
-          test -f J2MEEmulator/Resources/LaunchScreen.storyboard
           test -f J2MEEmulator/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
           test -f Licenses/Runtime-Attribution.txt
 
@@ -59,7 +58,7 @@ jobs:
 
       - name: Package App into IPA
         run: |
-          rm -rf Payload jarNO1.ipa
+          rm -rf Payload jarNO1.ipa jarNO1-unsigned.ipa
           mkdir -p Payload
           APP_PATH=$(find "$PWD/build_out" -name "*.app" -type d | head -n 1)
           if [ -z "$APP_PATH" ]; then
@@ -82,34 +81,44 @@ jobs:
           test -f "$BUNDLE_PATH/nj.jpg"
           test -f "$BUNDLE_PATH/avatar.jpg"
           test -f "$BUNDLE_PATH/background-loop.wav"
-          test -d "$BUNDLE_PATH/LaunchScreen.storyboardc"
+          test ! -d "$BUNDLE_PATH/LaunchScreen.storyboardc"
 
-          # Clean unsigned/ad-hoc bundle compatible with ESign, KSign, Khoindvn, Sideloadly, AltStore & TrollStore
+          # 1. Unsigned clean IPA (no _CodeSignature, compatible with web signers / ESign / KSign)
           rm -rf "$BUNDLE_PATH/_CodeSignature" "$BUNDLE_PATH/embedded.mobileprovision"
           chmod 755 "$BUNDLE_PATH/jarNO1"
+          codesign --remove-signature "$BUNDLE_PATH/jarNO1" || true
+          zip -r jarNO1-unsigned.ipa Payload/
+
+          # 2. Standard ad-hoc IPA (100% identical packaging structure to proven installable build)
           codesign --force --deep --sign - "$BUNDLE_PATH"
           codesign --verify --deep --strict "$BUNDLE_PATH"
           echo "=== Content of App Bundle ==="
           ls -la "$BUNDLE_PATH/"
-          zip -r -9 jarNO1.ipa Payload/
-          ls -lh jarNO1.ipa
+          zip -r jarNO1.ipa Payload/
+          ls -lh jarNO1.ipa jarNO1-unsigned.ipa
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: jarNO1-IPA
-          path: jarNO1.ipa
+          path: |
+            jarNO1.ipa
+            jarNO1-unsigned.ipa
           retention-days: 14
 
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.1-jarNO1
-          name: "jarNO1 iOS v1.0.0 (Nhân bản 1:1 J2ME NST — Đã fix cài đặt & tên jarNO1)"
+          tag_name: v1.0.2-jarNO1
+          name: "jarNO1 iOS v1.0.2 (Fix lỗi xác minh tính toàn vẹn iOS 26 + 1:1 J2ME NST)"
           body: |
-            ## jarNO1 iOS v1.0.0 — Nhân bản 1:1 J2ME NST
-            - **Tên app & Bundle ID sạch không dấu cách**: `jarNO1.app` / `jarNO1` / `com.jarno1.j2me.ios` (tránh xung đột trùng tên/ID với J2ME NST và tương thích tối đa ESign, KSign, Khoindvn, Sideloadly, AltStore, SideStore, TrollStore).
-            - **Giao diện 1:1 `J2ME NST` (Light Mode `#F3F1EA` / `#FAFAFA`, Accent `#C9541F`)**: Đầy đủ `AppIcon`, `LaunchScreen`, `HomeTabBar` 2 tab (`Bản mod NST` / `Bản của bạn`), `nj.jpg`, `avatar.jpg`, `background-loop.wav`, bàn phím 15 phím `NstKeyboard`, đa cửa sổ, Proxy SOCKS5/HTTP và POSIX loopback server không gửi TCP RST.
+            ## jarNO1 iOS v1.0.2 — Fix lỗi cài đặt "không thể xác minh tính toàn vẹn"
+            - **Khôi phục 100% cấu trúc bundle iOS 26 đã cài thành công**: Thêm lại `UIApplicationSceneManifest` + `SwiftUI` `App` entry point + `UILaunchScreen` gốc, gỡ bỏ hoàn toàn `LaunchScreen.storyboardc` (loại bỏ `Info.plist` lồng nhau gây lỗi ký), bỏ cờ nén `-9` (`zip -r` chuẩn).
+            - **Giữ nguyên 100% giao diện & lõi 1:1 `J2ME NST`**: Light Mode `#F3F1EA` / `#FAFAFA`, Accent `#C9541F`, `HomeTabBar`, `nj.jpg`, `avatar.jpg`, `background-loop.wav`, bàn phím 15 phím `NstKeyboard`, đa cửa sổ, Proxy SOCKS5/HTTP và POSIX loopback server.
+            - **Cung cấp 2 bản IPA**:
+              - `jarNO1.ipa`: bản chuẩn ad-hoc (giống hệt cấu trúc bản cũ đã cài thành công).
+              - `jarNO1-unsigned.ipa`: bản sạch không `_CodeSignature` (dự phòng nếu công cụ ký ưu tiên IPA chưa ký).
           files: |
             jarNO1.ipa
+            jarNO1-unsigned.ipa

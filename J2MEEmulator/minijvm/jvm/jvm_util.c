@@ -405,14 +405,17 @@ void vm_share_wait(MiniJVM *jvm) {
 }
 
 void vm_share_timedwait(MiniJVM *jvm, s64 ms) {
+    if (ms < 0) ms = 0;
     struct timespec t;
     timespec_get(&t, TIME_UTC);
     t.tv_sec += ms / 1000;
     t.tv_nsec += (ms % 1000) * 1000000;
+    if (t.tv_nsec >= 1000000000L) {
+        t.tv_sec += t.tv_nsec / 1000000000L;
+        t.tv_nsec %= 1000000000L;
+    }
     s32 ret = cnd_timedwait(&jvm->threadlock.thread_cond, &jvm->threadlock.mutex_lock, &t);
-//    if (ret == ETIMEDOUT) {
-//        s32 debug = 1;
-//    }
+    (void) ret;
 }
 
 void vm_share_notify(MiniJVM *jvm) {

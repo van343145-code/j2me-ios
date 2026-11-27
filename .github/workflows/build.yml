@@ -78,6 +78,7 @@ jobs:
           test -f "$BUNDLE_PATH/jarNO1"
           test -f "$BUNDLE_PATH/j2me_api.jar"
           test -f "$BUNDLE_PATH/minijvm_rt.jar"
+          test -f "$BUNDLE_PATH/silent.wav"
           test -f "$BUNDLE_PATH/background-loop.wav"
 
           # Clean unsigned IPA (no _CodeSignature, no LC_CODE_SIGNATURE — 100% matching installable J2ME-Decade.ipa)
@@ -100,16 +101,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.5-jarNO1
-          name: "jarNO1 iOS v1.0.5 (Bỏ chế độ Bong Bóng — Chỉ giữ Cửa Sổ Nhỏ PiP kéo to nhỏ ngoài màn hình chính)"
+          tag_name: v1.0.6-jarNO1
+          name: "jarNO1 iOS v1.0.6 (Sửa triệt để treo tắt màn 24/24 & tự nhớ chạy ẩn đa nhiệm chuẩn NST)"
           body: |
-            ## jarNO1 iOS v1.0.5 — Bỏ Chế Độ Bong Bóng, Tối Ưu Cửa Sổ Nhỏ Ngoài Màn Hình Chính (PiP)
-            - **Xóa hoàn toàn chế độ Bong Bóng (`DecadeFloatingBubble`, `isBubbleMode` trong PiP và cửa sổ mini trong app)**:
-              - Chạm vào nút điều khiển trên cửa sổ PiP không bao giờ biến màn hình game thành vòng tròn bong bóng nữa.
-              - Bật `Ngủ Ẩn (Tắt Màn Đen)` không còn hiện bong bóng nổi gây vướng.
-            - **Tối ưu chế độ Cửa Sổ Nhỏ Ngoài Màn Hình Chính (PiP kéo to nhỏ tự do)**:
-              - Thêm nút **`Cửa Sổ Nhỏ Ngoài Màn Hình`** ngay trong menu **`⋮`** — 1 chạm bật cửa sổ PiP và tự thu gọn ra màn hình chính, xem game trực tiếp đè lên Home Screen / Facebook / TikTok / Safari, kéo di chuyển & dùng 2 ngón tay phóng to thu nhỏ tuỳ ý.
-              - Bơm sẵn khung hình thực kèm cờ `kCMSampleAttachmentKey_DisplayImmediately` trước khi gọi `startPictureInPicture()` và giữ luồng render hoạt động suốt quá trình chuyển nền (`isPiPActiveOrStarting`), khắc phục triệt để tình trạng PiP đen hình hoặc không lên khung hình.
-              - Giữ nguyên nút **`Ẩn Ứng Dụng (Chạy Ngầm)`** ẩn gọn sạch không toast chẩn đoán (chuẩn 1:1 `J2ME NST`), lõi mát máy 30 FPS & đóng gói **unsigned sạch 100%** (`jarNO1.ipa`).
+            ## jarNO1 iOS v1.0.6 — Treo Tắt Màn & Chạy Ẩn Đa Nhiệm 24/24 Không Nghỉ (Chuẩn J2ME NST)
+            - **Sửa triệt để lỗi khóa màn hình / ẩn đa nhiệm bị off game**:
+              - **Tách hoàn toàn `AVPictureInPictureController` / `AVSampleBufferDisplayLayer` khỏi khởi động mặc định**: chỉ tạo khi bấm `Cửa Sổ Nhỏ Ngoài Màn Hình` và giải phóng sạch khi đóng, đảm bảo phiên giữ nền là **100% pure audio-only** chuẩn `J2ME NST` — không bị iOS ngắt phiên video khi khóa màn hình.
+              - **Sửa lỗi `AVAudioPlayer.volume = 0.0` bị iOS 18/26 `mediaserverd` coi là tắt tiếng và đóng băng khi khóa màn**: phát `silent.wav` siêu trầm 16Hz (`-60 dBFS`, không nghe thấy ở mọi mức âm lượng) với `volume = 0.01` (tổng `-100 dBFS`, khác 0 cả PCM lẫn volume) + `.playback` / `.default` / `.mixWithOthers`.
+              - **Tự hồi phục khi có ngắt âm thanh / đổi thiết bị / khóa màn lặp lại**: sửa lỗi khóa vĩnh viễn cờ `interrupted = true` khi iOS không gửi `.ended`, lắng nghe đầy đủ `SceneDelegate` + `UIApplication` + `protectedDataWillBecomeUnavailableNotification` (khóa màn hình), tự gia hạn cầu nối 5 giây và kiểm tra lại mỗi 3 giây.
+              - **Tự nhớ chạy ẩn 24/24 y hệt J2ME NST**: bật `Ẩn Ứng Dụng (Chạy Ngầm)` 1 lần (hoặc giữ tích xanh `✓ Treo tắt màn 24/24` trong menu `⋮`) sẽ tự động lưu vĩnh viễn vào máy — mọi lần sau chỉ cần vuốt ẩn xuống đa nhiệm hay bấm nút nguồn tắt màn hình là game tự chạy nền liên tục 24/24 không nghỉ.
+            - **Tối ưu ổn định kết nối mạng & CPU nền**:
+              - Gỡ bỏ cờ `SO_TC_VO` dễ gây rớt NAT Wi-Fi/4G trên app non-VoIP, giữ `SO_KEEPALIVE` (20s/10s/12 lần) + `TCP_NODELAY` + chuyển `select()` sang `poll()` chống tràn `FD_SET` và xử lý an toàn `EAGAIN`/`EINTR`.
+              - Sửa lỗi tràn `tv_nsec` trong `vm_share_timedwait` (miniJVM) và thêm bộ chặn spin CPU nền trên `Canvas.repaint()`, cộng thêm bảo vệ OpenGL ES M3G khi ở nền.
+            - Giữ nguyên **không có chế độ Bong Bóng**, chỉ giữ **Cửa Sổ Nhỏ PiP kéo to nhỏ tự do** khi bật chủ động, đóng gói **unsigned sạch 100%** (`jarNO1.ipa`).
           files: |
             jarNO1.ipa

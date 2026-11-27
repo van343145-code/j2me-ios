@@ -19,6 +19,7 @@ final class TuoiThoPopupMenuView: UIView {
     var onOpenNativeKeyboard: (() -> Void)?
     var onToggleSplitView: (() -> Void)?
     var onOledSleepMode: (() -> Void)?
+    var onToggleTreo247: (() -> Void)?
     var onTogglePiP: (() -> Void)?
     var onHideApp: (() -> Void)?
     var onRestartGame: (() -> Void)?
@@ -37,7 +38,14 @@ final class TuoiThoPopupMenuView: UIView {
         }
     }
 
+    var isTreo247Active: Bool = DecadeBackgroundKeeper.shared.isTreoActive {
+        didSet {
+            updateTreo247Appearance()
+        }
+    }
+
     private var hideKeypadBtn: UIButton?
+    private var treo247Btn: UIButton?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -197,16 +205,17 @@ final class TuoiThoPopupMenuView: UIView {
         )
         contentStack.addArrangedSubview(btnOledSleep)
 
-        // 4e. Cửa Sổ Nhỏ Ngoài Màn Hình Chính (PiP kéo to nhỏ tự do)
-        let btnPiP = makeMenuItem(
-            iconName: "pip.enter",
-            iconColor: UIColor(red: 0.10, green: 0.46, blue: 0.88, alpha: 1.0),
-            title: "Cửa Sổ Nhỏ Ngoài Màn Hình",
-            action: #selector(handleTogglePiP)
+        // 4e. Treo 24/24 tắt màn & ẩn đa nhiệm (tự nhớ vĩnh viễn giống ✓ Treo tắt màn của J2ME NST)
+        let btnTreo247 = makeMenuItem(
+            iconName: isTreo247Active ? "checkmark.circle.fill" : "circle",
+            iconColor: isTreo247Active ? UIColor(red: 0.13, green: 0.62, blue: 0.30, alpha: 1.0) : UIColor(white: 0.55, alpha: 1.0),
+            title: isTreo247Active ? "✓ Treo tắt màn 24/24" : "Treo tắt màn 24/24",
+            action: #selector(handleToggleTreo247)
         )
-        contentStack.addArrangedSubview(btnPiP)
+        self.treo247Btn = btnTreo247
+        contentStack.addArrangedSubview(btnTreo247)
 
-        // 4f. Ẩn Ứng Dụng chạy ngầm (giống J2ME NST HideApp)
+        // 4f. Ẩn Ứng Dụng chạy ngầm (giống J2ME NST HideApp: tự bật & nhớ chạy ẩn 24/24 vĩnh viễn)
         let btnHideApp = makeMenuItem(
             iconName: "eye.slash.circle.fill",
             iconColor: UIColor(red: 0.08, green: 0.56, blue: 0.46, alpha: 1.0),
@@ -214,6 +223,15 @@ final class TuoiThoPopupMenuView: UIView {
             action: #selector(handleHideApp)
         )
         contentStack.addArrangedSubview(btnHideApp)
+
+        // 4g. Cửa Sổ Nhỏ Ngoài Màn Hình Chính (PiP kéo to nhỏ tự do)
+        let btnPiP = makeMenuItem(
+            iconName: "pip.enter",
+            iconColor: UIColor(red: 0.10, green: 0.46, blue: 0.88, alpha: 1.0),
+            title: "Cửa Sổ Nhỏ Ngoài Màn Hình",
+            action: #selector(handleTogglePiP)
+        )
+        contentStack.addArrangedSubview(btnPiP)
 
         // 5. Khởi Động Lại (Refresh icon tím)
         let btnRestart = makeMenuItem(
@@ -311,6 +329,20 @@ final class TuoiThoPopupMenuView: UIView {
         }
     }
 
+    private func updateTreo247Appearance() {
+        guard let btn = treo247Btn else { return }
+        for sub in btn.subviews {
+            if let lbl = sub as? UILabel {
+                lbl.text = isTreo247Active ? "✓ Treo tắt màn 24/24" : "Treo tắt màn 24/24"
+            } else if let iv = sub as? UIImageView {
+                iv.image = UIImage(systemName: isTreo247Active ? "checkmark.circle.fill" : "circle")
+                iv.tintColor = isTreo247Active
+                    ? UIColor(red: 0.13, green: 0.62, blue: 0.30, alpha: 1.0)
+                    : UIColor(white: 0.55, alpha: 1.0)
+            }
+        }
+    }
+
     @objc private func btnTouchDown(_ sender: UIButton) {
         sender.backgroundColor = UIColor(white: 0.95, alpha: 1.0)
     }
@@ -370,6 +402,12 @@ final class TuoiThoPopupMenuView: UIView {
     @objc private func handleOledSleep() {
         dismissMenu { [weak self] in
             self?.onOledSleepMode?()
+        }
+    }
+
+    @objc private func handleToggleTreo247() {
+        dismissMenu { [weak self] in
+            self?.onToggleTreo247?()
         }
     }
 

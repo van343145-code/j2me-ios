@@ -356,18 +356,28 @@ class AppsListViewController: UIViewController,
     }
 
     @objc private func tabTreo247Tapped() {
-        let isBTS = DecadeLocationKeeper.shared.isLocationModeActive
-        let netRunning = DecadeNetworkKeeper.shared.isRunning
-        let netConnected = DecadeNetworkKeeper.shared.isNetworkConnected
+        let isTreo = DecadeBackgroundKeeper.shared.isTreoActive
+        let isAudioPlaying = DecadeBackgroundKeeper.shared.isAudioPlaying
+        let hasGame = (GameViewController.currentActiveGameVC != nil)
+        let netDesc = DecadeNetworkManager.shared.currentNetworkDescription()
         let ramMB = Double(jvm_bridge_get_used_ram_kb()) / 1024.0
 
+        let audioState: String
+        if isAudioPlaying {
+            audioState = "ĐANG CHẠY NGẦM 24/24 ✓"
+        } else if isTreo && !hasGame {
+            audioState = "Sẵn sàng (tự chạy khi mở game)"
+        } else {
+            audioState = "Đang tắt"
+        }
+
         let alert = UIAlertController(
-            title: "Treo Game 24/24 Bất Tử",
-            message: "• Giữ Mạng 24/24: \(netRunning ? (netConnected ? "ĐANG GIỮ (Kết nối tốt)" : "Đang thử lại...") : "TẮT")\n  (Chống Wi-Fi ngủ khi tắt màn hình, chống nhà mạng 4G/5G ngắt kết nối)\n• Giữ Tiến Trình: Audio Bất Tử + \(isBTS ? "Định Vị BTS (0% Pin)" : "Tắt BTS")\n• RAM hiện tại: \(Int(ramMB)) MB",
+            title: "Treo Game 24/24 (Chuẩn NST)",
+            message: "• Tự nhớ chạy ẩn (Đa nhiệm & Tắt màn): \(isTreo ? "BẬT ✓" : "TẮT")\n• Luồng giữ nền Audio: \(audioState)\n• Kết nối mạng: \(netDesc)\n• RAM hiện tại: \(Int(ramMB)) MB",
             preferredStyle: .actionSheet
         )
-        alert.addAction(UIAlertAction(title: isBTS ? "Tắt chế độ Định Vị BTS" : "Bật kèm Định Vị BTS (0% Pin)", style: .default) { _ in
-            DecadeLocationKeeper.shared.isLocationModeActive.toggle()
+        alert.addAction(UIAlertAction(title: isTreo ? "Tắt chế độ Treo 24/24" : "Bật chế độ Treo 24/24 (Tự nhớ vĩnh viễn)", style: .default) { _ in
+            DecadeBackgroundKeeper.shared.setTreoActive(!isTreo)
         })
         alert.addAction(UIAlertAction(title: "Dọn dẹp RAM ngay", style: .default) { _ in
             DecadeBackgroundKeeper.shared.performRamCleanup(completion: nil)

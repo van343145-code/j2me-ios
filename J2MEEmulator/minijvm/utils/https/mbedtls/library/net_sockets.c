@@ -81,6 +81,7 @@ static int wsa_init_done = 0;
 #include <fcntl.h>
 #include <netdb.h>
 #include <errno.h>
+#include <poll.h>
 
 #endif /* ( _WIN32 || _WIN32_WCE ) && !EFIX64 && !EFI32 */
 
@@ -481,7 +482,7 @@ int mbedtls_net_recv( void *ctx, unsigned char *buf, size_t len )
         if( errno == EPIPE || errno == ECONNRESET || errno == ETIMEDOUT || errno == ENOTCONN || errno == EBADF )
             return( MBEDTLS_ERR_NET_CONN_RESET );
 
-        if( errno == EINTR )
+        if( errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK )
             return( MBEDTLS_ERR_SSL_WANT_READ );
 #endif
 
@@ -498,12 +499,15 @@ int mbedtls_net_recv_timeout( void *ctx, unsigned char *buf, size_t len,
                       uint32_t timeout )
 {
     int ret;
-    struct timeval tv;
-    fd_set read_fds;
     int fd = ((mbedtls_net_context *) ctx)->fd;
 
     if( fd < 0 )
         return( MBEDTLS_ERR_NET_INVALID_CONTEXT );
+
+#if ( defined(_WIN32) || defined(_WIN32_WCE) ) && !defined(EFIX64) && \
+    !defined(EFI32)
+    struct timeval tv;
+    fd_set read_fds;
 
     FD_ZERO( &read_fds );
     FD_SET( fd, &read_fds );
@@ -513,23 +517,35 @@ int mbedtls_net_recv_timeout( void *ctx, unsigned char *buf, size_t len,
 
     ret = select( fd + 1, &read_fds, NULL, NULL, timeout == 0 ? NULL : &tv );
 
-    /* Zero fds ready means we timed out */
     if( ret == 0 )
         return( MBEDTLS_ERR_SSL_TIMEOUT );
 
     if( ret < 0 )
     {
-#if ( defined(_WIN32) || defined(_WIN32_WCE) ) && !defined(EFIX64) && \
-    !defined(EFI32)
         if( WSAGetLastError() == WSAEINTR )
             return( MBEDTLS_ERR_SSL_WANT_READ );
-#else
-        if( errno == EINTR )
-            return( MBEDTLS_ERR_SSL_WANT_READ );
-#endif
 
         return( MBEDTLS_ERR_NET_RECV_FAILED );
     }
+#else
+    struct pollfd pfd;
+    pfd.fd = fd;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+
+    ret = poll( &pfd, 1, timeout == 0 ? -1 : (int) timeout );
+
+    if( ret == 0 )
+        return( MBEDTLS_ERR_SSL_TIMEOUT );
+
+    if( ret < 0 )
+    {
+        if( errno == EINTR || errno == EAGAIN )
+            return( MBEDTLS_ERR_SSL_WANT_READ );
+
+        return( MBEDTLS_ERR_NET_RECV_FAILED );
+    }
+#endif
 
     /* This call will not block */
     return( mbedtls_net_recv( ctx, buf, len ) );
@@ -561,7 +577,7 @@ int mbedtls_net_send( void *ctx, const unsigned char *buf, size_t len )
         if( errno == EPIPE || errno == ECONNRESET )
             return( MBEDTLS_ERR_NET_CONN_RESET );
 
-        if( errno == EINTR )
+        if( errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK )
             return( MBEDTLS_ERR_SSL_WANT_WRITE );
 #endif
 

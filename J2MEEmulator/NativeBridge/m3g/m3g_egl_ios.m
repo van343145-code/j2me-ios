@@ -18,6 +18,7 @@
 #import <Foundation/Foundation.h>
 #include "EGL/egl.h"
 #include <stdio.h>
+extern int j2me_render_is_background(void);
 
 /* ============================================================
  * Internal state
@@ -333,6 +334,9 @@ EGLBoolean eglQuerySurface(EGLDisplay dpy, EGLSurface surface,
 EGLBoolean eglMakeCurrent(EGLDisplay dpy, EGLSurface draw,
                             EGLSurface read, EGLContext ctx) {
     (void)dpy; (void)read;
+    if (j2me_render_is_background()) {
+        return EGL_TRUE;
+    }
 
     if (!ctx || ctx == EGL_NO_CONTEXT) {
         /* Unbind — pop previous context from stack */
@@ -360,6 +364,9 @@ EGLBoolean eglMakeCurrent(EGLDisplay dpy, EGLSurface draw,
 
 EGLBoolean eglSwapBuffers(EGLDisplay dpy, EGLSurface surface) {
     (void)dpy; (void)surface;
+    if (j2me_render_is_background()) {
+        return EGL_TRUE;
+    }
     glFlush();
     return EGL_TRUE;
 }

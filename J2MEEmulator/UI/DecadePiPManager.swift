@@ -2,10 +2,17 @@
 //  DecadePiPManager.swift
 //  J2MEEmulator
 //
-//  Picture-in-Picture (PiP) manager using AVSampleBufferDisplayLayer.
+//  LAZY & EPHEMERAL Picture-in-Picture (PiP) manager using AVSampleBufferDisplayLayer.
 //  Provides ONLY the live resizable floating small game window outside the app
 //  on the Home Screen and over other apps (drag anywhere + pinch to resize freely).
 //  Bubble mode has been completely removed.
+//
+//  CRITICAL FOR 24/24 LOCK-SCREEN BACKGROUND EXECUTION (matching J2ME NST):
+//  - NEVER instantiates AVSampleBufferDisplayLayer or AVPictureInPictureController
+//    at launch or in viewDidLoad()!
+//  - Creates them strictly on demand when the user taps "Cửa Sổ Nhỏ Ngoài Màn Hình",
+//    and completely tears them down when PiP stops/fails so iOS video/PiP media session
+//    management NEVER interferes with pure audio-only background execution on screen lock!
 //
 
 import UIKit
@@ -18,7 +25,7 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
     static let shared = DecadePiPManager()
 
     private var pipController: AVPictureInPictureController?
-    let displayLayer = AVSampleBufferDisplayLayer()
+    private var displayLayer: AVSampleBufferDisplayLayer?
     private weak var sourceView: UIView?
 
     private var pixelBufferPool: CVPixelBufferPool?
@@ -52,62 +59,87 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         super.init()
     }
 
-    func setupAudioSession() {
+    /// Registers the host view WITHOUT creating AVSampleBufferDisplayLayer or AVPictureInPictureController.
+    /// Keeps the process 100% pure audio-only (matching J2ME NST) until the user explicitly opens PiP.
+    func setup(sourceView: UIView) {
+        self.sourceView = sourceView
+    }
+
+    private func setupAudioSession() {
         // Ensure DecadeBackgroundKeeper's live .playback + .mixWithOthers session is active
         if DecadeBackgroundKeeper.shared.isAudioPlaying {
             return
         }
-        do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, options: [.mixWithOthers])
-            try session.setActive(true)
-        } catch {
-            print("[PiP] AudioSession error: \(error)")
-        }
+        DecadeBackgroundKeeper.shared.startKeepalive()
     }
 
-    func setup(sourceView: UIView) {
-        guard AVPictureInPictureController.isPictureInPictureSupported() else {
-            print("[PiP] Picture in Picture is not supported on this device")
-            return
+    private func ensurePipelineCreated() -> AVPictureInPictureController? {
+        if let existing = pipController, displayLayer != nil {
+            if let host = sourceView {
+                displayLayer?.frame = host.bounds
+                if displayLayer?.superlayer == nil {
+                    host.layer.addSublayer(displayLayer!)
+                }
+            }
+            return existing
         }
 
-        self.sourceView = sourceView
-
-        // Setup display layer
-        displayLayer.videoGravity = .resizeAspect
-        displayLayer.isOpaque = true
-        displayLayer.frame = sourceView.bounds
-
-        if displayLayer.superlayer == nil {
-            sourceView.layer.addSublayer(displayLayer)
+        guard AVPictureInPictureController.isPictureInPictureSupported(),
+              let host = sourceView else {
+            return nil
         }
 
-        // Setup PiP Controller with ContentSource(sampleBufferDisplayLayer:playbackDelegate:)
+        let layer = AVSampleBufferDisplayLayer()
+        layer.videoGravity = .resizeAspect
+        layer.isOpaque = true
+        layer.frame = host.bounds
+        host.layer.addSublayer(layer)
+        self.displayLayer = layer
+
         let contentSource = AVPictureInPictureController.ContentSource(
-            sampleBufferDisplayLayer: displayLayer,
+            sampleBufferDisplayLayer: layer,
             playbackDelegate: self
         )
-
         let controller = AVPictureInPictureController(contentSource: contentSource)
         controller.delegate = self
-        // Keep inline auto-PiP off so normal NST invisible hide ("Ẩn ứng dụng") stays silent;
-        // PiP opens cleanly on demand via "Cửa Sổ Nhỏ Ngoài Màn Hình".
+        // Keep inline auto-PiP off so normal NST invisible hide ("Ẩn ứng dụng") & screen lock stay silent.
         controller.canStartPictureInPictureAutomaticallyFromInline = false
         controller.requiresLinearPlayback = true
         if controller.responds(to: Selector(("setControlsStyle:"))) {
             controller.setValue(1, forKey: "controlsStyle")
         }
         self.pipController = controller
-        print("[PiP] Setup completed with AVSampleBufferDisplayLayer")
+        print("[PiP] Lazily created AVPictureInPictureController on demand")
+        return controller
+    }
+
+    /// Completely tears down AVPictureInPictureController & AVSampleBufferDisplayLayer when PiP closes,
+    /// leaving zero active video/Pegasus sessions to interfere with screen-lock audio keep-alive.
+    func teardownPipeline() {
+        let work = {
+            self.isPiPStarting = false
+            self.pipController?.delegate = nil
+            self.pipController = nil
+            self.displayLayer?.flushAndRemoveImage()
+            self.displayLayer?.removeFromSuperlayer()
+            self.displayLayer = nil
+            self.pixelBufferPool = nil
+            self.lastPoolSize = .zero
+            self.hasEnqueuedInitialFrame = false
+        }
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.async(execute: work)
+        }
     }
 
     func updateLayout() {
-        guard let sourceView = sourceView else { return }
-        displayLayer.frame = sourceView.bounds
+        guard let sourceView = sourceView, let layer = displayLayer else { return }
+        layer.frame = sourceView.bounds
     }
 
-    /// Starts the outside-app resizable PiP small window, priming AVSampleBufferDisplayLayer first
+    /// Starts the outside-app resizable PiP small window, lazily creating & priming AVSampleBufferDisplayLayer
     /// so iOS immediately receives a live video frame before transitioning into PiP.
     func startPiP(initialFrame: CGImage? = nil) {
         guard AVPictureInPictureController.isPictureInPictureSupported() else {
@@ -115,8 +147,8 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
             onPiPFailed?(err)
             return
         }
-        guard let controller = pipController else {
-            let err = NSError(domain: "DecadePiP", code: -2, userInfo: [NSLocalizedDescriptionKey: "PiP chưa được khởi tạo"])
+        guard let controller = ensurePipelineCreated() else {
+            let err = NSError(domain: "DecadePiP", code: -2, userInfo: [NSLocalizedDescriptionKey: "PiP chưa sẵn sàng"])
             onPiPFailed?(err)
             return
         }
@@ -138,7 +170,7 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         controller.invalidatePlaybackState()
 
         // Allow one CoreAnimation commit tick so AVSampleBufferDisplayLayer registers the primed frame
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
             guard let self = self, let ctrl = self.pipController, self.isPiPStarting else { return }
             if !ctrl.isPictureInPictureActive {
                 ctrl.startPictureInPicture()
@@ -150,6 +182,8 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         isPiPStarting = false
         if let controller = pipController, controller.isPictureInPictureActive {
             controller.stopPictureInPicture()
+        } else {
+            teardownPipeline()
         }
     }
 
@@ -166,11 +200,12 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
     private func enqueueFrameSynchronously(_ cgImage: CGImage) {
         guard let sampleBuffer = createSampleBuffer(from: cgImage) else { return }
         let work = {
-            if self.displayLayer.status == .failed {
-                self.displayLayer.flush()
+            guard let layer = self.displayLayer else { return }
+            if layer.status == .failed {
+                layer.flush()
             }
-            if self.displayLayer.isReadyForMoreMediaData {
-                self.displayLayer.enqueue(sampleBuffer)
+            if layer.isReadyForMoreMediaData {
+                layer.enqueue(sampleBuffer)
                 self.hasEnqueuedInitialFrame = true
                 self.lastFrameTime = CACurrentMediaTime()
             }
@@ -184,7 +219,7 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
 
     func updateFrame(_ cgImage: CGImage) {
         // Never allocate CVPixelBuffer/IOSurface when PiP is completely off
-        guard isPiPActiveOrStarting else { return }
+        guard isPiPActiveOrStarting, displayLayer != nil else { return }
 
         let now = CACurrentMediaTime()
         if hasEnqueuedInitialFrame {
@@ -196,25 +231,20 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         guard let sampleBuffer = createSampleBuffer(from: cgImage) else { return }
 
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, self.isPiPActiveOrStarting else { return }
-            if self.displayLayer.status == .failed {
-                self.displayLayer.flush()
+            guard let self = self, self.isPiPActiveOrStarting, let layer = self.displayLayer else { return }
+            if layer.status == .failed {
+                layer.flush()
             }
-            if self.displayLayer.isReadyForMoreMediaData {
-                self.displayLayer.enqueue(sampleBuffer)
+            if layer.isReadyForMoreMediaData {
+                layer.enqueue(sampleBuffer)
             }
         }
     }
 
     func purgeBuffers() {
         guard !isPiPActiveOrStarting else { return }
-        DispatchQueue.main.async { [weak self] in
-            guard let self = self, !self.isPiPActiveOrStarting else { return }
-            self.displayLayer.flush()
-            self.pixelBufferPool = nil
-            self.lastPoolSize = .zero
-            self.hasEnqueuedInitialFrame = false
-        }
+        guard displayLayer != nil || pixelBufferPool != nil else { return }
+        teardownPipeline()
     }
 
     private func makeBlackFallbackImage() -> CGImage? {
@@ -308,11 +338,9 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         ) else { return nil }
 
-        // Clear container background with clean black
         context.setFillColor(red: 0, green: 0, blue: 0, alpha: 1)
         context.fill(CGRect(x: 0, y: 0, width: targetW, height: targetH))
 
-        // Draw crisp pixel-perfect live game frame
         context.interpolationQuality = .none
         context.draw(cgImage, in: CGRect(x: drawX, y: drawY, width: origW, height: origH))
 
@@ -341,7 +369,6 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         )
         guard sStatus == noErr, let sb = sampleBuffer else { return nil }
 
-        // Display immediately so AVSampleBufferDisplayLayer never stalls waiting on controlTimebase
         if let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: true) {
             let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
             CFDictionarySetValue(
@@ -359,7 +386,6 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         _ pictureInPictureController: AVPictureInPictureController,
         setPlaying playing: Bool
     ) {
-        // Always stay live small game window — bubble mode removed
         pictureInPictureController.invalidatePlaybackState()
     }
 
@@ -379,7 +405,6 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         _ pictureInPictureController: AVPictureInPictureController,
         didTransitionToRenderSize newRenderSize: CMVideoDimensions
     ) {
-        // User pinched/resized PiP window freely on Home Screen
     }
 
     func pictureInPictureController(
@@ -406,15 +431,13 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
     }
 
     func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        isPiPStarting = false
-        purgeBuffers()
+        teardownPipeline()
         onPiPStateChanged?(false)
     }
 
     func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
-        isPiPStarting = false
         print("[PiP] Failed: \(error.localizedDescription)")
-        purgeBuffers()
+        teardownPipeline()
         onPiPFailed?(error)
         onPiPStateChanged?(false)
     }

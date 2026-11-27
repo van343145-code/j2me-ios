@@ -513,6 +513,12 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         )
         NotificationCenter.default.addObserver(
             self,
+            selector: #selector(handleAppBackgroundChange),
+            name: UIApplication.protectedDataWillBecomeUnavailableNotification,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
             selector: #selector(handleAppForegroundChange),
             name: UIApplication.willEnterForegroundNotification,
             object: nil
@@ -540,6 +546,9 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         _ = DecadeNetworkManager.shared // Activate smart network monitor
 
         GameViewController.currentActiveGameVC = self
+        if DecadeBackgroundKeeper.shared.isTreoActive {
+            DecadeBackgroundKeeper.shared.startKeepalive()
+        }
         NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
     }
 
@@ -1359,6 +1368,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         softKeyHaptic.impactOccurred(intensity: 0.6)
         let popup = TuoiThoPopupMenuView()
         popup.isKeypadHidden = self.isKeypadHidden
+        popup.isTreo247Active = DecadeBackgroundKeeper.shared.isTreoActive
 
         popup.onOpenGameSettings = { [weak self] in
             self?.openInGameSettings()
@@ -1384,6 +1394,9 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         }
         popup.onOledSleepMode = { [weak self] in
             self?.enterOledSleepMode()
+        }
+        popup.onToggleTreo247 = { [weak self] in
+            self?.toggleTreoTatMan()
         }
         popup.onTogglePiP = { [weak self] in
             self?.openFloatingPiPWindow()
@@ -1748,14 +1761,18 @@ class GameViewController: UIViewController, UITextFieldDelegate {
     }
 
     /// Ẩn ứng dụng xuống nền iOS (khớp 1:1 J2ME NST MicroController.HideApp:
-    /// đảm bảo Sticky + BackgroundAudio đang chạy trước khi thu gọn sau 0.3s)
+    /// tự bật & lưu vĩnh viễn chế độ Treo 24/24 để các lần sau vuốt đa nhiệm hay khóa màn hình
+    /// đều tự nhớ chạy ngầm liên tục không nghỉ).
     private func hideAppToBackground() {
         isKeepAwake = true
         let wasAlreadyPlaying = DecadeBackgroundKeeper.shared.isAudioPlaying
-        if !DecadeBackgroundKeeper.shared.isTreoActive {
-            DecadeBackgroundKeeper.shared.setTreoActive(true)
-        }
+        // Permanently persist "Treo 24/24" so every future multitasking swipe or screen lock auto-remembers!
+        DecadeBackgroundKeeper.shared.setTreoActive(true)
         DecadeBackgroundKeeper.shared.startKeepalive()
+        // Tear down any inactive PiP video layer so screen-lock runs 100% pure audio-only like NST
+        if !DecadePiPManager.shared.isPiPActive {
+            DecadePiPManager.shared.teardownPipeline()
+        }
         let delay: TimeInterval = wasAlreadyPlaying ? 0.3 : 0.5
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             let suspendSel = NSSelectorFromString("suspend")
@@ -1767,15 +1784,18 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         }
     }
 
+    /// Bật/tắt chế độ Treo tắt màn & chạy ẩn đa nhiệm 24/24 (khớp 1:1 ✓ Treo tắt màn của J2ME NST)
     private func toggleTreoTatMan() {
-        isKeepAwake.toggle()
-        DecadeBackgroundKeeper.shared.setTreoActive(isKeepAwake)
-        if isKeepAwake {
-            openFloatingPiPWindow()
+        let next = !DecadeBackgroundKeeper.shared.isTreoActive
+        isKeepAwake = next
+        DecadeBackgroundKeeper.shared.setTreoActive(next)
+        if next {
+            DecadeBackgroundKeeper.shared.startKeepalive()
+            showToast(message: "Treo 24/24: BẬT (Tự nhớ khi ẩn đa nhiệm & tắt màn)")
         } else {
             dismissOledBlackOverlay()
             DecadePiPManager.shared.stopPiP()
-            showToast(message: "Đã tắt treo tắt màn")
+            showToast(message: "Treo 24/24: TẮT")
         }
     }
 

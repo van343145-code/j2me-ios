@@ -77,6 +77,8 @@ public abstract class Canvas extends Displayable {
      */
     private static final long BG_FRAME_INTERVAL_MS = 250L; // ~4 FPS cool pace in background / hidden tabs
     private volatile boolean pendingBgFlush = false;
+    private long bgRepaintWindowStart = 0L;
+    private int bgRepaintWindowCount = 0;
 
     private static boolean isRenderThrottled() {
         try {
@@ -255,6 +257,17 @@ public abstract class Canvas extends Displayable {
         boolean throttled = isRenderThrottled();
         if (!throttled) {
             limitFps();
+        } else {
+            // Anti-spin guard for games that rely on repaint()/serviceRepaints() for frame pacing:
+            // normal 25-30 FPS games (like NSO) never trigger this, while spin loops are capped
+            // below iOS background CPU watchdog limits.
+            long nowMs = System.currentTimeMillis();
+            if (nowMs - bgRepaintWindowStart >= 1000L) {
+                bgRepaintWindowStart = nowMs;
+                bgRepaintWindowCount = 1;
+            } else if (++bgRepaintWindowCount > 60) {
+                try { Thread.sleep(12L); } catch (InterruptedException ignored) {}
+            }
         }
         boolean post;
         synchronized (paintEvent.clip) {

@@ -8,6 +8,7 @@
 //
 
 import UIKit
+import ObjectiveC
 
 class DecadeConfigViewController: UIViewController {
 
@@ -19,6 +20,8 @@ class DecadeConfigViewController: UIViewController {
 
     // State for Màn Hình
     private var selectedScreenSizeIndex: Int = 0
+    private var customScreenWidth: Int = 0
+    private var customScreenHeight: Int = 0
     private let screenSizes: [(label: String, w: Int, h: Int)] = [
         ("Theo Form Game", 0, 0),
         ("240 × 320", 240, 320),
@@ -628,6 +631,42 @@ class DecadeConfigViewController: UIViewController {
     // ============================================================
 
     @objc private func screenSizeTapped(_ sender: UIButton) {
+        if sender.tag == 5 {
+            let initW = customScreenWidth > 0 ? customScreenWidth : 360
+            let initH = customScreenHeight > 0 ? customScreenHeight : DecadeScreenSizeEditor.autoHeight(for: initW, keypadHidden: UserDefaults.standard.bool(forKey: "keypad_hidden_\(gid)"))
+            DecadeScreenSizeEditor.presentNstCustomSizeAlert(
+                on: self,
+                initialW: initW,
+                initialH: initH,
+                keypadHidden: UserDefaults.standard.bool(forKey: "keypad_hidden_\(gid)"),
+                showApplyAllOption: true
+            ) { [weak self] w, h, applyAll in
+                guard let self = self else { return }
+                if w == 0 || h == 0 {
+                    self.selectedScreenSizeIndex = 0
+                    self.customScreenWidth = 0
+                    self.customScreenHeight = 0
+                    if self.screenSizeButtons.indices.contains(5) {
+                        self.screenSizeButtons[5].setTitle("Tự Chọn", for: .normal)
+                    }
+                } else {
+                    self.selectedScreenSizeIndex = 5
+                    self.customScreenWidth = w
+                    self.customScreenHeight = h
+                    if self.screenSizeButtons.indices.contains(5) {
+                        self.screenSizeButtons[5].setTitle("Tự Chọn\n\(w)×\(h)", for: .normal)
+                    }
+                }
+                for (idx, btn) in self.screenSizeButtons.enumerated() {
+                    btn.isSelectedState = (idx == self.selectedScreenSizeIndex)
+                }
+                if applyAll {
+                    DecadeScreenSizeEditor.applySize(w: w, h: h, gameId: self.gid, applyToAll: true)
+                }
+                self.saveValues()
+            }
+            return
+        }
         selectedScreenSizeIndex = sender.tag
         for (idx, btn) in screenSizeButtons.enumerated() {
             btn.isSelectedState = (idx == selectedScreenSizeIndex)
@@ -757,13 +796,25 @@ class DecadeConfigViewController: UIViewController {
         let defaults = UserDefaults.standard
 
         // Cỡ Màn Hình
-        let savedW = defaults.object(forKey: "resW_\(gid)") as? Int ?? 0
-        let savedH = defaults.object(forKey: "resH_\(gid)") as? Int ?? 0
+        let savedW = defaults.object(forKey: "resW_\(gid)") as? Int ?? (defaults.object(forKey: "jarno1_global_resW") as? Int ?? 0)
+        let savedH = defaults.object(forKey: "resH_\(gid)") as? Int ?? (defaults.object(forKey: "jarno1_global_resH") as? Int ?? 0)
         var foundSizeIdx = 0
-        for (i, s) in screenSizes.enumerated() {
-            if s.w == savedW && s.h == savedH {
-                foundSizeIdx = i
-                break
+        if savedW > 0 && savedH > 0 {
+            var matchedPreset = false
+            for (i, s) in screenSizes.enumerated() where s.w > 0 && s.h > 0 {
+                if s.w == savedW && s.h == savedH {
+                    foundSizeIdx = i
+                    matchedPreset = true
+                    break
+                }
+            }
+            if !matchedPreset {
+                foundSizeIdx = 5
+                customScreenWidth = savedW
+                customScreenHeight = savedH
+                if screenSizeButtons.indices.contains(5) {
+                    screenSizeButtons[5].setTitle("Tự Chọn\n\(savedW)×\(savedH)", for: .normal)
+                }
             }
         }
         selectedScreenSizeIndex = foundSizeIdx
@@ -818,8 +869,10 @@ class DecadeConfigViewController: UIViewController {
         let defaults = UserDefaults.standard
 
         let sSize = screenSizes[selectedScreenSizeIndex]
-        defaults.set(sSize.w, forKey: "resW_\(gid)")
-        defaults.set(sSize.h, forKey: "resH_\(gid)")
+        let effW = (selectedScreenSizeIndex == 5) ? max(0, customScreenWidth) : max(0, sSize.w)
+        let effH = (selectedScreenSizeIndex == 5) ? max(0, customScreenHeight) : max(0, sSize.h)
+        defaults.set(effW, forKey: "resW_\(gid)")
+        defaults.set(effH, forKey: "resH_\(gid)")
 
         let sRes = resOptions[selectedResIndex].val
         defaults.set(sRes, forKey: "res_scale_\(gid)")
@@ -840,8 +893,8 @@ class DecadeConfigViewController: UIViewController {
             object: nil,
             userInfo: [
                 "gid": gid,
-                "width": sSize.w,
-                "height": sSize.h,
+                "width": effW,
+                "height": effH,
                 "scale": sRes,
                 "fps": sFps,
                 "treo": treoSwitch.isOn,
@@ -851,6 +904,170 @@ class DecadeConfigViewController: UIViewController {
                 "sound": soundSwitch.isOn
             ]
         )
+    }
+}
+
+// ============================================================
+// MARK: - NST-style Screen Size Editor (Rộng × Cao tự điền tỷ lệ)
+// ============================================================
+
+final class DecadeScreenSizeEditor {
+
+    private final class AutoSyncDelegate: NSObject {
+        weak var widthField: UITextField?
+        weak var heightField: UITextField?
+        let keypadHidden: Bool
+        private var heightEditedManually = false
+        private var isUpdatingProgrammatically = false
+
+        init(widthField: UITextField, heightField: UITextField, keypadHidden: Bool) {
+            self.widthField = widthField
+            self.heightField = heightField
+            self.keypadHidden = keypadHidden
+            super.init()
+            widthField.addTarget(self, action: #selector(widthChanged), for: .editingChanged)
+            heightField.addTarget(self, action: #selector(heightChanged), for: .editingChanged)
+        }
+
+        @objc private func widthChanged() {
+            guard !isUpdatingProgrammatically, !heightEditedManually else { return }
+            let raw = (widthField?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let w = Int(raw) else { return }
+            isUpdatingProgrammatically = true
+            if w <= 0 {
+                heightField?.text = "0"
+            } else {
+                let clampedW = min(1200, max(120, w))
+                heightField?.text = "\(DecadeScreenSizeEditor.autoHeight(for: clampedW, keypadHidden: keypadHidden))"
+            }
+            isUpdatingProgrammatically = false
+        }
+
+        @objc private func heightChanged() {
+            if !isUpdatingProgrammatically {
+                heightEditedManually = true
+            }
+        }
+    }
+
+    private static var assocKey: UInt8 = 0
+
+    static func autoHeight(for width: Int, keypadHidden: Bool) -> Int {
+        let w = max(120, min(1200, width))
+        let screen = UIScreen.main.bounds
+        let sw = max(1.0, min(screen.width, screen.height))
+        let sh = max(1.0, max(screen.width, screen.height))
+        let safeTop = UIApplication.shared.windows.first?.safeAreaInsets.top ?? 47.0
+        let topBarH: CGFloat = 38.0 + safeTop
+        let kpH: CGFloat = keypadHidden ? 0.0 : 280.0
+        let visibleH = max(120.0, sh - topBarH - kpH)
+        var autoH = Int((Double(w) * Double(visibleH / sw)).rounded())
+        if autoH % 2 != 0 { autoH += 1 }
+        return max(120, min(2000, autoH))
+    }
+
+    static func effectiveSize(forGameId gid: String, autoProvider: () -> (w: Int, h: Int)) -> (w: Int, h: Int) {
+        let d = UserDefaults.standard
+        let w = d.object(forKey: "resW_\(gid)") as? Int ?? (d.object(forKey: "jarno1_global_resW") as? Int ?? 0)
+        let h = d.object(forKey: "resH_\(gid)") as? Int ?? (d.object(forKey: "jarno1_global_resH") as? Int ?? 0)
+        if w > 0 && h > 0 {
+            return (w, h)
+        }
+        return autoProvider()
+    }
+
+    static func applySize(w: Int, h: Int, gameId: String?, applyToAll: Bool) {
+        let d = UserDefaults.standard
+        let cleanW = w > 0 ? max(120, min(1200, w)) : 0
+        let cleanH = h > 0 ? max(120, min(2000, h)) : 0
+        let finalW = (cleanW > 0 && cleanH > 0) ? cleanW : 0
+        let finalH = (cleanW > 0 && cleanH > 0) ? cleanH : 0
+
+        if let gid = gameId, !gid.isEmpty {
+            d.set(finalW, forKey: "resW_\(gid)")
+            d.set(finalH, forKey: "resH_\(gid)")
+        }
+        if applyToAll {
+            d.set(finalW, forKey: "jarno1_global_resW")
+            d.set(finalH, forKey: "jarno1_global_resH")
+            let gamesDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!.path + "/games"
+            if let files = try? FileManager.default.contentsOfDirectory(atPath: gamesDir) {
+                for file in files where file.hasSuffix(".jar") {
+                    let stem = URL(fileURLWithPath: file).deletingPathExtension().lastPathComponent
+                    let g = stem.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
+                    let gFull = file.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
+                    d.set(finalW, forKey: "resW_\(g)")
+                    d.set(finalH, forKey: "resH_\(g)")
+                    d.set(finalW, forKey: "resW_\(gFull)")
+                    d.set(finalH, forKey: "resH_\(gFull)")
+                }
+            }
+        }
+        d.synchronize()
+    }
+
+    static func presentNstCustomSizeAlert(
+        on vc: UIViewController,
+        initialW: Int,
+        initialH: Int,
+        keypadHidden: Bool,
+        showApplyAllOption: Bool,
+        onApply: @escaping (_ w: Int, _ h: Int, _ applyAll: Bool) -> Void
+    ) {
+        let alert = UIAlertController(
+            title: "Cỡ Màn Hình (Chuẩn NST)",
+            message: "Rộng càng lớn nhìn càng rộng, Cao tự điền cho vừa màn (sửa được).\nNhập 0 để dùng tự động vừa màn.",
+            preferredStyle: .alert
+        )
+
+        alert.addTextField { tf in
+            tf.placeholder = "Rộng (ví dụ: 240, 360, 480)"
+            tf.keyboardType = .numberPad
+            tf.text = initialW > 0 ? "\(initialW)" : "360"
+            tf.clearButtonMode = .whileEditing
+        }
+        alert.addTextField { tf in
+            tf.placeholder = "Cao (tự điền theo Rộng, sửa được)"
+            tf.keyboardType = .numberPad
+            tf.text = initialH > 0 ? "\(initialH)" : "\(autoHeight(for: initialW > 0 ? initialW : 360, keypadHidden: keypadHidden))"
+            tf.clearButtonMode = .whileEditing
+        }
+
+        if let wField = alert.textFields?.first, let hField = alert.textFields?.last {
+            let sync = AutoSyncDelegate(widthField: wField, heightField: hField, keypadHidden: keypadHidden)
+            objc_setAssociatedObject(alert, &assocKey, sync, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        }
+
+        let parseAndApply: (Bool) -> Void = { applyAll in
+            let wRaw = Int((alert.textFields?.first?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            let hRaw = Int((alert.textFields?.last?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
+            if wRaw <= 0 {
+                onApply(0, 0, applyAll)
+                return
+            }
+            let clampedW = max(120, min(1200, wRaw))
+            let clampedH = hRaw > 0 ? max(120, min(2000, hRaw)) : autoHeight(for: clampedW, keypadHidden: keypadHidden)
+            onApply(clampedW, clampedH, applyAll)
+        }
+
+        if showApplyAllOption {
+            alert.addAction(UIAlertAction(title: "Áp cho game này", style: .default) { _ in
+                parseAndApply(false)
+            })
+            alert.addAction(UIAlertAction(title: "Áp cho mọi game (NST)", style: .default) { _ in
+                parseAndApply(true)
+            })
+        } else {
+            alert.addAction(UIAlertAction(title: "Lưu cho mọi game", style: .default) { _ in
+                parseAndApply(true)
+            })
+        }
+        alert.addAction(UIAlertAction(title: "Mặc định vừa màn (0×0)", style: .default) { _ in
+            onApply(0, 0, false)
+        })
+        alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
+
+        vc.present(alert, animated: true)
     }
 }
 

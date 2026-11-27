@@ -11,6 +11,7 @@ import UIKit
 final class TuoiThoPopupMenuView: UIView {
 
     var onOpenGameSettings: (() -> Void)?
+    var onOpenScreenSize: (() -> Void)?
     var onOpenProxySettings: (() -> Void)?
     var onCleanRam: (() -> Void)?
     var onOpenKeyboardSettings: (() -> Void)?
@@ -131,6 +132,15 @@ final class TuoiThoPopupMenuView: UIView {
             action: #selector(handleGameSettings)
         )
         contentStack.addArrangedSubview(btnGameSettings)
+
+        // 1a. Cỡ Màn Hình chuẩn NST (Size Rộng × Cao)
+        let btnScreenSize = makeMenuItem(
+            iconName: "aspectratio.fill",
+            iconColor: UIColor(red: 0.16, green: 0.49, blue: 0.85, alpha: 1.0),
+            title: "Cỡ Màn Hình (Size)",
+            action: #selector(handleScreenSize)
+        )
+        contentStack.addArrangedSubview(btnScreenSize)
 
         // 1b. Proxy SOCKS5 (Shield icon xanh dương)
         let btnProxy = makeMenuItem(
@@ -365,6 +375,12 @@ final class TuoiThoPopupMenuView: UIView {
     @objc private func handleGameSettings() {
         dismissMenu { [weak self] in
             self?.onOpenGameSettings?()
+        }
+    }
+
+    @objc private func handleScreenSize() {
+        dismissMenu { [weak self] in
+            self?.onOpenScreenSize?()
         }
     }
 

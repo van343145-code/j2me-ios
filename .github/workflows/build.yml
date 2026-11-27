@@ -101,16 +101,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.11-jarNO1
-          name: "jarNO1 iOS v1.0.11 (Tối ưu treo 24/24 nhẹ mát + mượt ping mạng)"
+          tag_name: v1.0.12-jarNO1
+          name: "jarNO1 iOS v1.0.12 (Chỉnh Size màn hình chuẩn NST + tối ưu treo 24/24 mát máy & mượt ping)"
           body: |
-            ## jarNO1 iOS v1.0.11 — Tối Ưu Treo Dài Mát Máy & Mượt Ping Mạng
-            - Giữ nguyên toàn bộ bản vá gốc `v1.0.10` cho `jthread_waitTime`, `Unsafe.park`, `Canvas` tắt màn và lõi `AVAudioPlayer` 1:1 J2ME NST.
-            - **Chống spin & treo luồng ghi socket (`jni_io.c`)**:
-              - Thay `thrd_yield()` (0ms) bằng `threadSleep(2)` và kiểm tra `is_interrupt` ở `writeBuf` / `writeByte` khi gặp `MBEDTLS_ERR_SSL_WANT_WRITE`, tránh quay CPU 100% gây nóng máy khi mạng 4G/proxy nghẽn đường lên.
-            - **Tối ưu ping & chống bufferbloat mạng (`decade_proxy_tunnel.c`)**:
-              - Bật `IP_TOS` / `IPV6_TCLASS` (`IPTOS_LOWDELAY`), `TCP_NOTSENT_LOWAT = 16KB`, `SO_NET_SERVICE_TYPE` (`NET_SERVICE_TYPE_RD` trên iOS) và áp `decade_network_optimize_socket` (`TCP_NODELAY`) ngay trước bước bắt tay SOCKS5/HTTP proxy.
-            - **Giảm ~92% ghi ổ đĩa nền (`DecadeBackgroundKeeper.swift`)**:
-              - Giảm tần suất đồng bộ `UserDefaults` Flight Recorder khi ở nền từ `5s/lần` xuống `60s/lần` (vẫn ghi ngay lúc vào nền, thoát nền, hoặc khi CPU/chẩn đoán tăng bất thường), giúp treo 24/24 nhẹ máy, ít hao pin hơn.
+            ## jarNO1 iOS v1.0.12 — Chỉnh Cỡ Màn Hình Chuẩn NST + Tối Ưu Mát Máy & Mượt Ping
+            - **Thêm mục `Cỡ Màn Hình (Size)` chuẩn J2ME NST**:
+              - Có ngay trong **Menu 3 chấm `[⋮]` khi đang chơi**, trong **Cài Đặt Game → Tự Chọn**, và trong tab **Cài Đặt → Cỡ Màn Hình (Chuẩn NST)**.
+              - Nhập **Rộng (Width)** bất kỳ (`120..1200`), **Cao (Height)** tự điền theo đúng tỷ lệ khung màn hình (và vẫn sửa tay được), chọn nhanh preset, bật/tắt **Ép toàn màn** tức thì, và tuỳ chọn **Áp cho game này** hoặc **Áp cho mọi game**.
+            - **Tối ưu treo 24/24 mát máy & mượt ping mạng**:
+              - Thay `thrd_yield()` bằng `threadSleep(2)` + kiểm tra `is_interrupt` ở `writeBuf`/`writeByte` (`jni_io.c`) khi gặp `MBEDTLS_ERR_SSL_WANT_WRITE`.
+              - Bật `IP_TOS`/`IPV6_TCLASS` (`IPTOS_LOWDELAY`), `TCP_NOTSENT_LOWAT = 16KB`, `SO_NET_SERVICE_TYPE = NET_SERVICE_TYPE_RD`, `TCP_NODELAY` trước bắt tay proxy (`decade_proxy_tunnel.c`), và timeout connect `10s` (`net_sockets.c`).
+              - Giảm ~92% ghi ổ đĩa nền `UserDefaults` Flight Recorder (`5s` → `60s`, `DecadeBackgroundKeeper.swift`).
           files: |
             jarNO1.ipa

@@ -496,8 +496,14 @@ class AppsListViewController: UIViewController,
             let sizeString = String(format: "%.1f MB", Double(fileSize) / (1024.0 * 1024.0))
 
             let gid = fileName.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
-            let savedW = UserDefaults.standard.object(forKey: "resW_\(gid)") as? Int ?? 0
-            let savedH = UserDefaults.standard.object(forKey: "resH_\(gid)") as? Int ?? 0
+            let stemGid = URL(fileURLWithPath: jar.path).deletingPathExtension().lastPathComponent
+                .replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
+            let savedW = UserDefaults.standard.object(forKey: "resW_\(stemGid)") as? Int
+                ?? UserDefaults.standard.object(forKey: "resW_\(gid)") as? Int
+                ?? (UserDefaults.standard.object(forKey: "jarno1_global_resW") as? Int ?? 0)
+            let savedH = UserDefaults.standard.object(forKey: "resH_\(stemGid)") as? Int
+                ?? UserDefaults.standard.object(forKey: "resH_\(gid)") as? Int
+                ?? (UserDefaults.standard.object(forKey: "jarno1_global_resH") as? Int ?? 0)
             let resStr = (savedW > 0 && savedH > 0) ? "\(savedW)×\(savedH)" : "Theo Form Game"
 
             return (appName, jar.path, fileName, meta?.version, meta?.vendor, jarIcon, sizeString, resStr)
@@ -532,8 +538,14 @@ class AppsListViewController: UIViewController,
                 let sizeString = String(format: "%.1f MB", Double(fileSize) / (1024.0 * 1024.0))
 
                 let gid = fileName.replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
-                let savedW = UserDefaults.standard.object(forKey: "resW_\(gid)") as? Int ?? 0
-                let savedH = UserDefaults.standard.object(forKey: "resH_\(gid)") as? Int ?? 0
+                let stemGid = URL(fileURLWithPath: jar.path).deletingPathExtension().lastPathComponent
+                    .replacingOccurrences(of: "[^a-zA-Z0-9._-]", with: "_", options: .regularExpression)
+                let savedW = UserDefaults.standard.object(forKey: "resW_\(stemGid)") as? Int
+                    ?? UserDefaults.standard.object(forKey: "resW_\(gid)") as? Int
+                    ?? (UserDefaults.standard.object(forKey: "jarno1_global_resW") as? Int ?? 0)
+                let savedH = UserDefaults.standard.object(forKey: "resH_\(stemGid)") as? Int
+                    ?? UserDefaults.standard.object(forKey: "resH_\(gid)") as? Int
+                    ?? (UserDefaults.standard.object(forKey: "jarno1_global_resH") as? Int ?? 0)
                 let resStr = (savedW > 0 && savedH > 0) ? "\(savedW)×\(savedH)" : "Theo Form Game"
 
                 return (appName, jar.path, fileName, meta?.version, meta?.vendor, jarIcon, sizeString, resStr)
@@ -757,6 +769,7 @@ class AppsListViewController: UIViewController,
     @objc private func showTopMoreMenuActionSheet() {
         let alert = UIAlertController(title: "Cài Đặt & Tuỳ Chọn", message: nil, preferredStyle: .actionSheet)
         alert.addAction(UIAlertAction(title: "👑 Tác giả: Vạn Trần idol J2me NSV IOS", style: .default) { [weak self] _ in self?.showAuthorInfo() })
+        alert.addAction(UIAlertAction(title: "📐 Cỡ Màn Hình (Chuẩn NST)", style: .default) { [weak self] _ in self?.showGlobalScreenSizeDialog() })
         alert.addAction(UIAlertAction(title: "🌐 Quản lý Proxy SOCKS5", style: .default) { [weak self] _ in self?.showProxyDialog() })
         alert.addAction(UIAlertAction(title: "🔄 Thay IP Phiên Bản", style: .default) { [weak self] _ in self?.showChangeIpDialog() })
         alert.addAction(UIAlertAction(title: "⚙ Thiết lập game", style: .default) { [weak self] _ in self?.showGlobalSettings() })
@@ -790,6 +803,26 @@ class AppsListViewController: UIViewController,
         let nav = UINavigationController(rootViewController: changeIpVC)
         nav.modalPresentationStyle = .pageSheet
         present(nav, animated: true)
+    }
+
+    private func showGlobalScreenSizeDialog() {
+        let defaults = UserDefaults.standard
+        let initW = defaults.object(forKey: "jarno1_global_resW") as? Int ?? 360
+        let initH = defaults.object(forKey: "jarno1_global_resH") as? Int ?? DecadeScreenSizeEditor.autoHeight(for: initW, keypadHidden: false)
+        DecadeScreenSizeEditor.presentNstCustomSizeAlert(
+            on: self,
+            initialW: initW > 0 ? initW : 360,
+            initialH: initH > 0 ? initH : DecadeScreenSizeEditor.autoHeight(for: 360, keypadHidden: false),
+            keypadHidden: false,
+            showApplyAllOption: false
+        ) { [weak self] w, h, _ in
+            DecadeScreenSizeEditor.applySize(w: w, h: h, gameId: nil, applyToAll: true)
+            self?.scanApps()
+            let desc = (w > 0 && h > 0) ? "\(w)×\(h)" : "Tự động vừa màn"
+            let ok = UIAlertController(title: "Đã lưu Cỡ Màn Hình", message: "Đã áp dụng \(desc) cho mọi game.", preferredStyle: .alert)
+            ok.addAction(UIAlertAction(title: "OK", style: .default))
+            self?.present(ok, animated: true)
+        }
     }
 
     private func showGlobalSettings() {
@@ -1114,26 +1147,23 @@ Game [\(existing.name)] đã tồn tại trên thiết bị!
 
     static func resolution(for app: AppInfo) -> (w: Int, h: Int) {
         let gid = gameId(for: app)
-        let w = UserDefaults.standard.object(forKey: "resW_\(gid)") as? Int ?? 0
-        let h = UserDefaults.standard.object(forKey: "resH_\(gid)") as? Int ?? 0
-        if w > 0 && h > 0 {
-            return (w, h)
+        return DecadeScreenSizeEditor.effectiveSize(forGameId: gid) {
+            let scale = UserDefaults.standard.object(forKey: "res_scale_\(gid)") as? Int ?? 360
+            let screen = UIScreen.main.bounds
+            let sw = max(1.0, min(screen.width, screen.height))
+            let sh = max(1.0, max(screen.width, screen.height))
+
+            let isKbHidden = UserDefaults.standard.bool(forKey: "keypad_hidden_\(gid)")
+            let kpH: CGFloat = isKbHidden ? 0.0 : 280.0
+            let safeTop = UIApplication.shared.windows.first?.safeAreaInsets.top ?? 47.0
+            let topBarH: CGFloat = 44.0 + safeTop
+
+            let visibleH = max(120.0, sh - topBarH - kpH)
+            let baseW = scale > 0 ? scale : Int(sw)
+            var autoH = Int((Double(baseW) * Double(visibleH / sw)).rounded())
+            if autoH % 2 != 0 { autoH += 1 }
+            return (baseW, autoH)
         }
-        let scale = UserDefaults.standard.object(forKey: "res_scale_\(gid)") as? Int ?? 360
-        let screen = UIScreen.main.bounds
-        let sw = max(1.0, min(screen.width, screen.height))
-        let sh = max(1.0, max(screen.width, screen.height))
-
-        let isKbHidden = UserDefaults.standard.bool(forKey: "keypad_hidden_\(gid)")
-        let kpH: CGFloat = isKbHidden ? 0.0 : 280.0
-        let safeTop = UIApplication.shared.windows.first?.safeAreaInsets.top ?? 47.0
-        let topBarH: CGFloat = 44.0 + safeTop
-
-        let visibleH = max(120.0, sh - topBarH - kpH)
-        let baseW = scale > 0 ? scale : Int(sw)
-        var autoH = Int((Double(baseW) * Double(visibleH / sw)).rounded())
-        if autoH % 2 != 0 { autoH += 1 }
-        return (baseW, autoH)
     }
 
     static func fpsLimit(for app: AppInfo) -> Int {

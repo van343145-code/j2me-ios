@@ -404,13 +404,11 @@ class GameViewController: UIViewController, UITextFieldDelegate {
             isKeypadHidden = true
         }
 
-        let savedW = UserDefaults.standard.object(forKey: "resW_\(currentGameId)") as? Int ?? 0
-        let savedH = UserDefaults.standard.object(forKey: "resH_\(currentGameId)") as? Int ?? 0
-        if savedW == 0 || savedH == 0 {
-            let auto = calculateAutoCanvasSize()
-            canvasWidth = auto.w
-            canvasHeight = auto.h
+        let effSize = DecadeScreenSizeEditor.effectiveSize(forGameId: currentGameId) {
+            calculateAutoCanvasSize()
         }
+        canvasWidth = effSize.w
+        canvasHeight = effSize.h
 
         emulatorView.canvasWidth = canvasWidth
         emulatorView.canvasHeight = canvasHeight
@@ -1380,6 +1378,9 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         popup.onOpenGameSettings = { [weak self] in
             self?.openInGameSettings()
         }
+        popup.onOpenScreenSize = { [weak self] in
+            self?.promptScreenSizeDialog()
+        }
         popup.onOpenProxySettings = { [weak self] in
             self?.openProxyManager(segment: 0)
         }
@@ -1486,11 +1487,15 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         guard !isShuttingDown, tabSessions.indices.contains(activeTabIndex) else { return }
         let slot = activeSlot
         guard restartingSlots.insert(slot).inserted else { return }
-        let savedW = UserDefaults.standard.object(forKey: "resW_\(currentGameId)") as? Int ?? 0
-        let savedH = UserDefaults.standard.object(forKey: "resH_\(currentGameId)") as? Int ?? 0
-        let size = (savedW > 0 && savedH > 0) ? (savedW, savedH) : calculateAutoCanvasSize()
-        tabSessions[activeTabIndex].width = size.0
+        let size = DecadeScreenSizeEditor.effectiveSize(forGameId: currentGameId) {
+            calculateAutoCanvasSize()
+        }
+        tabSessions[activeTabIndex].width = size.w
         tabSessions[activeTabIndex].height = size.1
+        canvasWidth = size.w
+        canvasHeight = size.h
+        emulatorView.canvasWidth = size.w
+        emulatorView.canvasHeight = size.h
         tabSessions[activeTabIndex].screenshot = nil
         showToast(message: "Đang khởi động lại tab \(activeTabIndex + 1)…")
         if tabWorkerSlots.contains(slot) {
@@ -1540,6 +1545,72 @@ class GameViewController: UIViewController, UITextFieldDelegate {
                 self.showToast(message: String(format: "RAM đang tối ưu: %.0f MB", afterMB))
             }
         }
+    }
+
+    private func promptScreenSizeDialog() {
+        let gid = currentGameId
+        let legGid = legacyGameId
+        let autoSize = calculateAutoCanvasSize()
+        let isFill = !isAspectFitEnabled
+
+        let sheet = UIAlertController(
+            title: "Cỡ Màn Hình (Size) — Chuẩn NST",
+            message: "Hiện tại: \(canvasWidth) × \(canvasHeight)\nRộng càng lớn nhìn càng rộng. Đổi cỡ sẽ khởi động lại tab hiện tại.",
+            preferredStyle: .actionSheet
+        )
+
+        let applyNewSize: (Int, Int, Bool) -> Void = { [weak self] w, h, applyAll in
+            guard let self = self else { return }
+            DecadeScreenSizeEditor.applySize(w: w, h: h, gameId: gid, applyToAll: applyAll)
+            self.restartGameSession()
+        }
+
+        sheet.addAction(UIAlertAction(title: "📐 Nhập Rộng × Cao (Tự điền Cao như NST)...", style: .default) { [weak self] _ in
+            guard let self = self else { return }
+            DecadeScreenSizeEditor.presentNstCustomSizeAlert(
+                on: self,
+                initialW: self.canvasWidth > 0 ? self.canvasWidth : autoSize.w,
+                initialH: self.canvasHeight > 0 ? self.canvasHeight : autoSize.h,
+                keypadHidden: self.isKeypadHidden,
+                showApplyAllOption: true
+            ) { w, h, applyAll in
+                applyNewSize(w, h, applyAll)
+            }
+        })
+
+        sheet.addAction(UIAlertAction(title: "✨ Tự động vừa màn (\(autoSize.w) × \(autoSize.h))", style: .default) { _ in
+            applyNewSize(0, 0, false)
+        })
+
+        for (label, w, h) in [("240 × 320 (Chuẩn cổ điển)", 240, 320),
+                               ("320 × 240 (Ngang)", 320, 240),
+                               ("360 × 640 (Rộng vừa)", 360, 640),
+                               ("480 × 800 (Siêu rộng)", 480, 800)] {
+            sheet.addAction(UIAlertAction(title: label, style: .default) { _ in
+                applyNewSize(w, h, false)
+            })
+        }
+
+        sheet.addAction(UIAlertAction(
+            title: isFill ? "⤢ Ép toàn màn (Co giãn): ĐANG BẬT ✓" : "⤢ Ép toàn màn (Co giãn): ĐANG TẮT",
+            style: .default
+        ) { [weak self] _ in
+            guard let self = self else { return }
+            let newFill = !isFill
+            UserDefaults.standard.set(newFill, forKey: "decade_fill_screen_\(gid)")
+            UserDefaults.standard.set(!newFill, forKey: "aspect_\(gid)")
+            UserDefaults.standard.set(newFill, forKey: "decade_fill_screen_\(legGid)")
+            UserDefaults.standard.set(!newFill, forKey: "aspect_\(legGid)")
+            self.emulatorView.isAspectFit = !newFill
+            self.showToast(message: newFill ? "⤢ Đã bật Ép toàn màn (lấp đầy khung)" : "📐 Đã tắt Ép toàn màn (giữ đúng tỷ lệ gốc)")
+        })
+
+        sheet.addAction(UIAlertAction(title: "Đóng", style: .cancel))
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = menuBtn
+            popover.sourceRect = menuBtn.bounds
+        }
+        present(sheet, animated: true)
     }
 
     private func openInGameSettings() {
@@ -1594,9 +1665,9 @@ class GameViewController: UIViewController, UITextFieldDelegate {
     }
 
     @objc private func handleConfigChanged(_ notif: Notification) {
-        let savedW = UserDefaults.standard.object(forKey: "resW_\(currentGameId)") as? Int ?? 0
-        let savedH = UserDefaults.standard.object(forKey: "resH_\(currentGameId)") as? Int ?? 0
-        let targetSize = (savedW > 0 && savedH > 0) ? (savedW, savedH) : calculateAutoCanvasSize()
+        let targetSize = DecadeScreenSizeEditor.effectiveSize(forGameId: currentGameId) {
+            calculateAutoCanvasSize()
+        }
 
         let isForceFullscreen = isForceFullscreenEnabled
         let isForceFill = isForceFullscreen || !isAspectFitEnabled

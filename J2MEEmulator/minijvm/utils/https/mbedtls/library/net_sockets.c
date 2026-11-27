@@ -164,6 +164,12 @@ int mbedtls_net_connect( mbedtls_net_context *ctx, const char *host,
             continue;
         }
 
+#if (defined(__APPLE__) || defined(__MACH__)) && defined(TCP_CONNECTIONTIMEOUT)
+        {
+            int conn_to = 10;
+            setsockopt( ctx->fd, IPPROTO_TCP, TCP_CONNECTIONTIMEOUT, &conn_to, sizeof( conn_to ) );
+        }
+#endif
         if( connect( ctx->fd, cur->ai_addr, MSVC_INT_CAST cur->ai_addrlen ) == 0 )
         {
             extern void decade_network_optimize_socket(int fd);

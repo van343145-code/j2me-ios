@@ -102,6 +102,8 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     // Passive on-device background execution proof telemetry
     private var bgEnterDate: Date?
     private var bgLastHeartbeatElapsed: Int = 0
+    private var bgLastDiskSyncElapsed: Int = -60
+    private var bgLastSavedWaitDiag: String = ""
     private(set) var lastBgWallSeconds: Int = 0
     private(set) var lastBgAliveSeconds: Int = 0
     private(set) var lastBgReport: String = "Chưa ẩn/tắt màn lần nào"
@@ -459,7 +461,9 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         guard hasActiveGame, bgEnterDate == nil else { return }
         bgEnterDate = Date()
         bgLastHeartbeatElapsed = 0
-        recordBackgroundSnapshot(aliveSec: 0, active: true)
+        bgLastDiskSyncElapsed = 0
+        bgLastSavedWaitDiag = ""
+        recordBackgroundSnapshot(aliveSec: 0, active: true, forceSync: true)
     }
 
     var lastWaitDiag: String {
@@ -468,11 +472,22 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         return String(cString: buf)
     }
 
-    private func recordBackgroundSnapshot(aliveSec: Int, active: Bool) {
+    private func recordBackgroundSnapshot(aliveSec: Int, active: Bool, forceSync: Bool = false) {
+        let waitDiag = lastWaitDiag
+        let newDiag = !waitDiag.isEmpty && waitDiag != bgLastSavedWaitDiag
+        let cpuPct = Int(min(999.0, max(0.0, jvm_bridge_get_cpu_usage_percent())).rounded())
+        let duePeriodicFlush = (aliveSec - bgLastDiskSyncElapsed) >= 60
+        guard forceSync || duePeriodicFlush || newDiag || cpuPct >= 50 else {
+            return
+        }
+
+        bgLastDiskSyncElapsed = aliveSec
+        if !waitDiag.isEmpty {
+            bgLastSavedWaitDiag = waitDiag
+        }
+
         let d = UserDefaults.standard
         let ramMB = Int((Double(jvm_bridge_get_used_ram_kb()) / 1024.0).rounded())
-        let cpuPct = Int(min(999.0, max(0.0, jvm_bridge_get_cpu_usage_percent())).rounded())
-        let waitDiag = lastWaitDiag
         let audioInfo = "\(isAudioPlaying ? "playing" : audioStatus)" + (waitDiag.isEmpty ? "" : " • \(waitDiag)")
         d.set(active, forKey: Self.recActiveKey)
         if let entered = bgEnterDate {

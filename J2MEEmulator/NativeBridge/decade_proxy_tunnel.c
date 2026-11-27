@@ -8,6 +8,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -54,6 +55,26 @@ void decade_network_optimize_socket(int fd) {
     int bufsize = 131072;
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (const void *)&bufsize, sizeof(bufsize));
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (const void *)&bufsize, sizeof(bufsize));
+
+    // 5. Low-delay interactive QoS / anti-bufferbloat for responsive game ping
+#if defined(IP_TOS) && defined(IPTOS_LOWDELAY)
+    int tos = IPTOS_LOWDELAY;
+    setsockopt(fd, IPPROTO_IP, IP_TOS, (const void *)&tos, sizeof(tos));
+#endif
+#if defined(IPV6_TCLASS) && defined(IPTOS_LOWDELAY)
+    int tclass = IPTOS_LOWDELAY;
+    setsockopt(fd, IPPROTO_IPV6, IPV6_TCLASS, (const void *)&tclass, sizeof(tclass));
+#endif
+#if defined(__APPLE__) || defined(__MACH__)
+#if defined(TCP_NOTSENT_LOWAT)
+    int notsent_lowat = 16384;
+    setsockopt(fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT, (const void *)&notsent_lowat, sizeof(notsent_lowat));
+#endif
+#if defined(SO_NET_SERVICE_TYPE) && defined(NET_SERVICE_TYPE_RD)
+    int svc_type = NET_SERVICE_TYPE_RD;
+    setsockopt(fd, SOL_SOCKET, SO_NET_SERVICE_TYPE, (const void *)&svc_type, sizeof(svc_type));
+#endif
+#endif
 }
 
 static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -208,6 +229,9 @@ int decade_proxy_connect(void *runtime_or_jvm, mbedtls_net_context *ctx, const c
         printf("[ProxyTunnel] ERROR: Failed to connect to proxy %s:%d (code %d)\n", phost, pport, ret);
         return ret;
     }
+
+    // Apply TCP_NODELAY & SO_NOSIGPIPE before proxy handshake for snappy connect
+    decade_network_optimize_socket(ctx->fd);
 
     // Set connection timeout on socket for handshake
     struct timeval tv = {10, 0};

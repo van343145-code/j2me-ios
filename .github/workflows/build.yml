@@ -101,16 +101,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.10-jarNO1
-          name: "jarNO1 iOS v1.0.10 (Sửa lỗi gốc CPU_FATAL 48s trong jthread_waitTime + khóa đệ quy Darwin)"
+          tag_name: v1.0.11-jarNO1
+          name: "jarNO1 iOS v1.0.11 (Tối ưu treo 24/24 nhẹ mát + mượt ping mạng)"
           body: |
-            ## jarNO1 iOS v1.0.10 — Sửa Nguyên Nhân Gốc Gây Tắt App Ở 48s Khi Khóa Màn Hình
-            - **Phát hiện chính xác từ crash log USB trên iPhone 16 Pro Max (`cpu_resource_fatal`)**:
-              - Cả 5 crash log (`11:39` → `15:08`) và Flight Recorder (`47s`, `RAM 98MB`, `AVAudioPlayer playing`) đều chứng minh app **không bị tắt vì âm thanh hay thiếu RAM**, mà bị watchdog nền của iOS kết thúc ở giây 47–51 (`48s CPU / 49s`, `98%` trên 1 nhân) vì một luồng Java quay 0ms trong **`jthread_waitTime` → `cnd_timedwait` (`__psynch_cvwait`) + `timespec_get`**.
-            - **Sửa triệt để tại `jthread_waitTime` (`jvm_util.c`) & `jni_reflect.c`**:
-              1. **Bỏ qua `cnd_timedwait` khi không giữ monitor** (`saveThread != current_thread || saveCount <= 0` — trước đây `pthread_cond_timedwait` trên Darwin trả `EPERM` ngay trong <1µs khiến vòng lặp quay 2 triệu lần/giây ở 100% CPU) → chuyển sang ngủ an toàn bằng `threadSleep`.
-              2. **Tháo khóa đệ quy chuẩn xác với `PTHREAD_MUTEX_RECURSIVE` của iOS** (`saveCount > 1`): mở `(saveCount - 1)` lần trước khi gọi `pthread_cond_(timed)wait` và khóa lại đúng số lần sau khi tỉnh để nhân Darwin luôn thấy lock count = 1.
-              3. **Chặn timeout âm/tràn số & dùng `timespec_get` trực tiếp**: tránh mốc thời gian quá khứ gây `ETIMEDOUT` tức thì, kẹp micro-wait nền tối thiểu `25ms`, và kiểm tra kết quả trả về `thrd_error` + chống bão đánh thức trong nền (kèm ghi nhận `wait_spin_diag` nếu phát sinh).
-              4. **Sửa `Unsafe.park` (`jni_reflect.c`) & Flight Recorder (`DecadeBackgroundKeeper.swift`)**: không truyền `waitms == 0` nhầm thành ngủ vô hạn khi hết hạn tuyệt đối, và chỉ ghi nhận phiên nền khi đang mở game.
+            ## jarNO1 iOS v1.0.11 — Tối Ưu Treo Dài Mát Máy & Mượt Ping Mạng
+            - Giữ nguyên toàn bộ bản vá gốc `v1.0.10` cho `jthread_waitTime`, `Unsafe.park`, `Canvas` tắt màn và lõi `AVAudioPlayer` 1:1 J2ME NST.
+            - **Chống spin & treo luồng ghi socket (`jni_io.c`)**:
+              - Thay `thrd_yield()` (0ms) bằng `threadSleep(2)` và kiểm tra `is_interrupt` ở `writeBuf` / `writeByte` khi gặp `MBEDTLS_ERR_SSL_WANT_WRITE`, tránh quay CPU 100% gây nóng máy khi mạng 4G/proxy nghẽn đường lên.
+            - **Tối ưu ping & chống bufferbloat mạng (`decade_proxy_tunnel.c`)**:
+              - Bật `IP_TOS` / `IPV6_TCLASS` (`IPTOS_LOWDELAY`), `TCP_NOTSENT_LOWAT = 16KB`, `SO_NET_SERVICE_TYPE` (`NET_SERVICE_TYPE_RD` trên iOS) và áp `decade_network_optimize_socket` (`TCP_NODELAY`) ngay trước bước bắt tay SOCKS5/HTTP proxy.
+            - **Giảm ~92% ghi ổ đĩa nền (`DecadeBackgroundKeeper.swift`)**:
+              - Giảm tần suất đồng bộ `UserDefaults` Flight Recorder khi ở nền từ `5s/lần` xuống `60s/lần` (vẫn ghi ngay lúc vào nền, thoát nền, hoặc khi CPU/chẩn đoán tăng bất thường), giúp treo 24/24 nhẹ máy, ít hao pin hơn.
           files: |
             jarNO1.ipa

@@ -485,12 +485,16 @@ s32 org_mini_net_SocketNative_writeBuf(Runtime *runtime, JClass *clazz) {
         jthread_block_enter(runtime);
         while (1) {
             ret = mbedtls_net_send(ctx, (const u8 *) jbyte_arr->arr_body + offset, count);
+            if (runtime->thrd_info->is_interrupt) {
+                ret = -1;
+                break;
+            }
             if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
                 if (vmsock->non_block) {
                     ret = 0;
                     break;
                 }
-                thrd_yield();
+                threadSleep(2);
                 continue;
             } else if (ret < 0) {
                 ret = -1;
@@ -520,12 +524,16 @@ s32 org_mini_net_SocketNative_writeByte(Runtime *runtime, JClass *clazz) {
         jthread_block_enter(runtime);
         while (1) {
             ret = mbedtls_net_send(ctx, &b, 1);
+            if (runtime->thrd_info->is_interrupt) {
+                ret = -1;
+                break;
+            }
             if (ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
                 if (vmsock->non_block) {
                     ret = 0;
                     break;
                 }
-                thrd_yield();
+                threadSleep(2);
                 continue;
             } else if (ret < 0) {
                 ret = -1;

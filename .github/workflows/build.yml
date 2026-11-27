@@ -1,4 +1,4 @@
-name: Build jarNO1 iOS IPA
+name: Build jarNO1 iOS IPA (Decade + NST Cool Core)
 
 on:
   push:
@@ -22,19 +22,18 @@ jobs:
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app || true
 
-      - name: Verify jarNO1 & Runtime Assets
+      - name: Compile and Package j2me_api.jar
         run: |
-          test -f Runtime/j2mejs/index.html
-          test -f Runtime/j2mejs/java/classes.jar
-          test -f Runtime/j2mejs/certs/_main.ks
-          test -f Runtime/j2mejs/js/nsv-runtime.js
-          test -f Runtime/j2mejs/js/nsv-network.js
-          test -f Runtime/j2mejs/VanTranidol_NokiaE6.jar
-          test -f J2MEEmulator/Resources/nj.jpg
-          test -f J2MEEmulator/Resources/avatar.jpg
-          test -f J2MEEmulator/Resources/background-loop.wav
-          test -f J2MEEmulator/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png
-          test -f Licenses/Runtime-Attribution.txt
+          echo "=== Compiling j2me_api.jar ==="
+          cd j2me_api
+          rm -rf classes sources.txt
+          mkdir -p classes
+          find src -name "*.java" > sources.txt
+          javac --release 8 -cp "../J2MEEmulator/Resources/jars/minijvm_rt.jar" -d classes @sources.txt
+          jar cf "../J2MEEmulator/Resources/jars/j2me_api.jar" -C classes .
+          rm -rf classes sources.txt
+          cd ..
+          ls -lh J2MEEmulator/Resources/jars/j2me_api.jar
 
       - name: Build Application with Xcode
         run: |
@@ -56,9 +55,9 @@ jobs:
               exit 1
             }
 
-      - name: Package App into IPA
+      - name: Package Clean Unsigned jarNO1.ipa
         run: |
-          rm -rf Payload jarNO1.ipa jarNO1-unsigned.ipa
+          rm -rf Payload jarNO1.ipa
           mkdir -p Payload
           APP_PATH=$(find "$PWD/build_out" -name "*.app" -type d | head -n 1)
           if [ -z "$APP_PATH" ]; then
@@ -72,53 +71,45 @@ jobs:
           cp -R "$APP_PATH" Payload/
 
           BUNDLE_PATH=$(find Payload -maxdepth 1 -name "*.app" -type d | head -n 1)
-          echo "Verifying embedded jarNO1 + Runtime inside: $BUNDLE_PATH"
-          test -f "$BUNDLE_PATH/jarNO1"
-          test -f "$BUNDLE_PATH/Runtime/j2mejs/index.html"
-          test -f "$BUNDLE_PATH/Runtime/j2mejs/java/classes.jar"
-          test -f "$BUNDLE_PATH/Runtime/j2mejs/certs/_main.ks"
-          test -f "$BUNDLE_PATH/Runtime/j2mejs/VanTranidol_NokiaE6.jar"
-          test -f "$BUNDLE_PATH/nj.jpg"
-          test -f "$BUNDLE_PATH/avatar.jpg"
-          test -f "$BUNDLE_PATH/background-loop.wav"
-          test ! -d "$BUNDLE_PATH/LaunchScreen.storyboardc"
+          cp -v J2MEEmulator/Resources/silent.wav "$BUNDLE_PATH/" || true
+          cp -v J2MEEmulator/Resources/background-loop.wav "$BUNDLE_PATH/" || true
 
-          # 1. Unsigned clean IPA (no _CodeSignature, compatible with web signers / ESign / KSign)
+          # Verify core Decade + NST files inside bundle
+          test -f "$BUNDLE_PATH/jarNO1"
+          test -f "$BUNDLE_PATH/j2me_api.jar"
+          test -f "$BUNDLE_PATH/minijvm_rt.jar"
+          test -f "$BUNDLE_PATH/background-loop.wav"
+
+          # Clean unsigned IPA (no _CodeSignature, no LC_CODE_SIGNATURE — 100% matching installable J2ME-Decade.ipa)
           rm -rf "$BUNDLE_PATH/_CodeSignature" "$BUNDLE_PATH/embedded.mobileprovision"
           chmod 755 "$BUNDLE_PATH/jarNO1"
           codesign --remove-signature "$BUNDLE_PATH/jarNO1" || true
-          zip -r jarNO1-unsigned.ipa Payload/
-
-          # 2. Standard ad-hoc IPA (100% identical packaging structure to proven installable build)
-          codesign --force --deep --sign - "$BUNDLE_PATH"
-          codesign --verify --deep --strict "$BUNDLE_PATH"
-          echo "=== Content of App Bundle ==="
+          echo "=== Content of jarNO1.app ==="
           ls -la "$BUNDLE_PATH/"
           zip -r jarNO1.ipa Payload/
-          ls -lh jarNO1.ipa jarNO1-unsigned.ipa
+          ls -lh jarNO1.ipa
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: jarNO1-IPA
-          path: |
-            jarNO1.ipa
-            jarNO1-unsigned.ipa
+          path: jarNO1.ipa
           retention-days: 14
 
       - name: Create or Update Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.2-jarNO1
-          name: "jarNO1 iOS v1.0.2 (Fix lỗi xác minh tính toàn vẹn iOS 26 + 1:1 J2ME NST)"
+          tag_name: v1.0.3-jarNO1
+          name: "jarNO1 iOS v1.0.3 (J2ME Decade + Port Lõi Mát Máy & Fix Tự Mở Hành Trang từ J2ME NST 1.0.0)"
           body: |
-            ## jarNO1 iOS v1.0.2 — Fix lỗi cài đặt "không thể xác minh tính toàn vẹn"
-            - **Khôi phục 100% cấu trúc bundle iOS 26 đã cài thành công**: Thêm lại `UIApplicationSceneManifest` + `SwiftUI` `App` entry point + `UILaunchScreen` gốc, gỡ bỏ hoàn toàn `LaunchScreen.storyboardc` (loại bỏ `Info.plist` lồng nhau gây lỗi ký), bỏ cờ nén `-9` (`zip -r` chuẩn).
-            - **Giữ nguyên 100% giao diện & lõi 1:1 `J2ME NST`**: Light Mode `#F3F1EA` / `#FAFAFA`, Accent `#C9541F`, `HomeTabBar`, `nj.jpg`, `avatar.jpg`, `background-loop.wav`, bàn phím 15 phím `NstKeyboard`, đa cửa sổ, Proxy SOCKS5/HTTP và POSIX loopback server.
-            - **Cung cấp 2 bản IPA**:
-              - `jarNO1.ipa`: bản chuẩn ad-hoc (giống hệt cấu trúc bản cũ đã cài thành công).
-              - `jarNO1-unsigned.ipa`: bản sạch không `_CodeSignature` (dự phòng nếu công cụ ký ưu tiên IPA chưa ký).
+            ## jarNO1 iOS v1.0.3 — J2ME Decade + Lõi Port từ J2ME NST 1.0.0.ipa
+            - **Giữ nguyên 100% lõi native `miniJVM` & giao diện `J2ME Decade`** (không WebView), đổi tên sạch sang **`jarNO1`** (`jarNO1.app`, `com.jarno1.j2me.ios`) và đóng gói **unsigned sạch 100%** (không `_CodeSignature`, không `LC_CODE_SIGNATURE`, khớp cấu trúc `J2ME-Decade.ipa` cài đặt chuẩn).
+            - **Fix triệt để lỗi tự mở Hành trang khi mở/quay lại game**: Loại bỏ lỗi `j2me_input_post_key(0, 0)` rơi vào `POINTER_PRESSED(0, 0)` trong `Display.java`, thay bằng mã sự kiện `J2ME_INPUT_FORCE_REPAINT (20)` riêng biệt.
+            - **Port lõi mát máy chuẩn `J2ME NST 1.0.0.ipa`**:
+              - Chuyển `Display.runEventLoop()` sang chờ sự kiện kernel `pthread_cond_timedwait` (`waitForInput`) — độ trễ bấm 0ms, bỏ polling 125 lần/giây tốn CPU.
+              - Mặc định **30 FPS** (áp dụng trực tiếp trong game không cần khởi động lại), tắt ép 3D supersampling 3x mặc định, tắt antialias/bilinear CoreGraphics cho sprite 2D (giữ chữ sắc nét), tự động giảm tải/ngắt render CG cho các tab ẩn không hiển thị.
+              - Thay `DecadeBackgroundKeeper` bằng lõi `BackgroundAudio` của `J2ME NST` (`AVAudioPlayer` phát `background-loop.wav` âm lượng `0.01`, chỉ chạy khi bật `Treo tắt màn`), tắt hoàn toàn `CLLocationManager` chạy ngầm, tắt HTTP HEAD polling 15 giây gây nóng sóng Wi-Fi/5G và bỏ private `BKSProcessAssertion`.
+              - Tối ưu chu kỳ GC `miniJVM` (10 giây / heap 48MB / 65%) giảm giật & đỉnh CPU.
           files: |
             jarNO1.ipa
-            jarNO1-unsigned.ipa

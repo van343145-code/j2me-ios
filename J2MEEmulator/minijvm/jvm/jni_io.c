@@ -419,8 +419,8 @@ static s32 sock_recv(VmSock *vmsock, u8 *buf, s32 count, Runtime *runtime) {
                 ret = 0;
                 break;
             }
-            // On blocking sockets, WANT_READ (e.g. from EINTR) means retry, NOT return 0 to Java!
-            thrd_yield();
+            // On blocking sockets, WANT_READ (e.g. from EINTR during GC/background) retries with brief sleep to prevent CPU spin.
+            threadSleep(2);
             continue;
         } else if (ret <= 0) {
             ret = -1;

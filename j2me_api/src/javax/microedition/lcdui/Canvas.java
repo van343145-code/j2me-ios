@@ -116,7 +116,8 @@ public abstract class Canvas extends Displayable {
             }
 
             if (throttled) {
-                limitBgFps();
+                pendingBgFlush = true;
+                return;
             }
 
             synchronized (paintLock) {
@@ -124,14 +125,11 @@ public abstract class Canvas extends Displayable {
                 if (graphics == null) return;
                 graphics.reset(l, t, r - l, b - t);
                 try {
-                    // Run paint() even when throttled (screen CG draw calls are no-ops in C, while offscreen MutableImages and animation ticks continue)
                     paint(graphics);
                 } catch (Throwable e) {
                     System.out.println("[Canvas] Warning: exception in paint(): " + e);
                 }
-                if (!throttled) {
-                    NativeBridge.flushToScreen(nativeContext);
-                }
+                NativeBridge.flushToScreen(nativeContext);
             }
         }
 
@@ -221,12 +219,11 @@ public abstract class Canvas extends Displayable {
     }
 
     /**
-     * Flush any trailing background repaint queued during throttled frame window (matches trailing-frame scheduling).
+     * Flush any trailing background repaint queued during throttled frame window (skipped while still throttled;
+     * Display.runEventLoop triggers forceFullRepaint() automatically upon foreground/focus resume).
      */
     void flushTrailingRepaintIfNeeded() {
-        if (!isShown() || !pendingBgFlush) return;
-        long now = System.currentTimeMillis();
-        if (now - lastFrameTime < BG_FRAME_INTERVAL_MS) return;
+        if (!isShown() || !pendingBgFlush || isRenderThrottled()) return;
         boolean post;
         synchronized (paintEvent.clip) {
             pendingBgFlush = false;
@@ -273,7 +270,7 @@ public abstract class Canvas extends Displayable {
         synchronized (paintEvent.clip) {
             boolean hasDirty = paintEvent.invalidateClip(this, x, y, x + w, y + h);
             if (!hasDirty) return;
-            if (throttled && (System.currentTimeMillis() - lastFrameTime < BG_FRAME_INTERVAL_MS)) {
+            if (throttled) {
                 pendingBgFlush = true;
                 return;
             }

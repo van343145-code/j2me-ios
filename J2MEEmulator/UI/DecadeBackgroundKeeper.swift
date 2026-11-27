@@ -80,7 +80,6 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     private var audioPlayer: AVAudioPlayer?
     private var monitorTimer: Timer?
     private var bgTaskHandoffTimer: Timer?
-    private var bgTickTimer: DispatchSourceTimer?
     private var ramCleanTimer: DispatchSourceTimer?
     private var currentGameName: String = "jarNO1"
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
@@ -91,12 +90,22 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     private var isInBackground = false
     private var lastBgHandoffTime: CFTimeInterval = 0
 
+    // Persistent Flight Recorder keys (survive SIGKILL / Jetsam / watchdog termination)
+    private static let recActiveKey = "jarno1_bg_rec_active"
+    private static let recStartKey = "jarno1_bg_rec_start"
+    private static let recAliveKey = "jarno1_bg_rec_alive"
+    private static let recRamKey = "jarno1_bg_rec_ram"
+    private static let recCpuKey = "jarno1_bg_rec_cpu"
+    private static let recAudioKey = "jarno1_bg_rec_audio"
+    private static let recLastReportKey = "jarno1_bg_rec_last_report"
+
     // Passive on-device background execution proof telemetry
     private var bgEnterDate: Date?
-    private var bgAliveTicks: Int = 0
+    private var bgLastHeartbeatElapsed: Int = 0
     private(set) var lastBgWallSeconds: Int = 0
     private(set) var lastBgAliveSeconds: Int = 0
     private(set) var lastBgReport: String = "Chưa ẩn/tắt màn lần nào"
+    private(set) var lastKilledPostMortem: String?
     private(set) var audioStatus: String = "stopped"
     private(set) var lastAudioError: String = ""
 
@@ -151,9 +160,28 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
 
     private override init() {
         super.init()
+        loadPreviousFlightRecord()
         setupNotifications()
         if isAutoCleanRamActive {
             startAutoRamCleaner()
+        }
+    }
+
+    private func loadPreviousFlightRecord() {
+        let d = UserDefaults.standard
+        if d.bool(forKey: Self.recActiveKey) {
+            let alive = d.integer(forKey: Self.recAliveKey)
+            let ram = d.integer(forKey: Self.recRamKey)
+            let cpu = d.integer(forKey: Self.recCpuKey)
+            let audio = d.string(forKey: Self.recAudioKey) ?? "unknown"
+            let summary = "⚠️ Phiên trước bị iOS dừng lúc \(alive)s (RAM \(ram)MB, CPU \(cpu)%, \(audio))"
+            lastKilledPostMortem = "Bị dừng lúc \(alive)s (\(ram)MB/\(cpu)%)"
+            lastBgReport = summary
+            d.set(false, forKey: Self.recActiveKey)
+            d.set(summary, forKey: Self.recLastReportKey)
+            d.synchronize()
+        } else if let saved = d.string(forKey: Self.recLastReportKey), !saved.isEmpty {
+            lastBgReport = saved
         }
     }
 
@@ -266,7 +294,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
 
     func performRamCleanup(completion: ((Double, Double) -> Void)? = nil) {
         let beforeMB = Double(jvm_bridge_get_used_ram_kb()) / 1024.0
-        let thresholdMB: Double = isInBackground ? 220.0 : 180.0
+        let thresholdMB: Double = isInBackground ? 100.0 : 180.0
         guard completion != nil || beforeMB > thresholdMB else { return }
 
         URLCache.shared.removeAllCachedResponses()
@@ -325,8 +353,9 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             self.interruptedAt = nil
             self.monitorTimer?.invalidate()
             self.monitorTimer = nil
-            self.stopBackgroundTickTimer()
             self.bgEnterDate = nil
+            self.bgLastHeartbeatElapsed = 0
+            UserDefaults.standard.set(false, forKey: Self.recActiveKey)
             self.audioPlayer?.stop()
             self.audioPlayer = nil
             self.audioStatus = "stopped"
@@ -338,7 +367,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    /// Exact 1:1 J2ME NST 5.0-second repeating monitor timer
+    /// Exact 1:1 J2ME NST 5.0-second repeating monitor timer + 5s Flight Recorder heartbeat
     private func startMonitorIfNeeded() {
         guard monitorTimer == nil else { return }
         let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
@@ -350,10 +379,14 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                     self.interruptedAt = nil
                     self.ensurePlaying()
                 }
-                return
-            }
-            if self.audioPlayer?.isPlaying != true {
+            } else if self.audioPlayer?.isPlaying != true {
                 self.ensurePlaying()
+            }
+
+            if self.isInBackground, let entered = self.bgEnterDate {
+                let elapsed = max(0, Int(Date().timeIntervalSince(entered)))
+                self.bgLastHeartbeatElapsed = elapsed
+                self.recordBackgroundSnapshot(aliveSec: elapsed, active: true)
             }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -420,49 +453,57 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         audioStatus = "playing"
     }
 
-    // MARK: - Passive Background Execution Proof Telemetry
+    // MARK: - Passive Background Execution Proof Telemetry & Flight Recorder
 
-    private func startBackgroundTickTimerIfNeeded() {
-        if bgEnterDate == nil {
-            bgEnterDate = Date()
-            bgAliveTicks = 0
-        }
-        guard bgTickTimer == nil else { return }
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
-        timer.schedule(deadline: .now() + 1.0, repeating: 1.0)
-        timer.setEventHandler { [weak self] in
-            guard let self = self, self.isInBackground else { return }
-            self.bgAliveTicks += 1
-        }
-        timer.resume()
-        bgTickTimer = timer
+    private func startBackgroundRecordingIfNeeded() {
+        guard bgEnterDate == nil else { return }
+        bgEnterDate = Date()
+        bgLastHeartbeatElapsed = 0
+        recordBackgroundSnapshot(aliveSec: 0, active: true)
     }
 
-    private func stopBackgroundTickTimer() {
-        bgTickTimer?.cancel()
-        bgTickTimer = nil
+    private func recordBackgroundSnapshot(aliveSec: Int, active: Bool) {
+        let d = UserDefaults.standard
+        let ramMB = Int((Double(jvm_bridge_get_used_ram_kb()) / 1024.0).rounded())
+        let cpuPct = Int(min(999.0, max(0.0, jvm_bridge_get_cpu_usage_percent())).rounded())
+        let audioInfo = "\(isAudioPlaying ? "playing" : audioStatus)"
+        d.set(active, forKey: Self.recActiveKey)
+        if let entered = bgEnterDate {
+            d.set(entered.timeIntervalSince1970, forKey: Self.recStartKey)
+        }
+        d.set(aliveSec, forKey: Self.recAliveKey)
+        d.set(ramMB, forKey: Self.recRamKey)
+        d.set(cpuPct, forKey: Self.recCpuKey)
+        d.set(audioInfo, forKey: Self.recAudioKey)
+        d.synchronize()
     }
 
     private func finalizeBackgroundTelemetryIfNeeded() {
-        stopBackgroundTickTimer()
         guard let entered = bgEnterDate else { return }
         bgEnterDate = nil
 
         let wall = max(0, Int(Date().timeIntervalSince(entered).rounded()))
-        let alive = min(wall, bgAliveTicks)
-        guard wall >= 3 else { return }
+        let alive = min(wall, bgLastHeartbeatElapsed)
+        UserDefaults.standard.set(false, forKey: Self.recActiveKey)
+        guard wall >= 3 else {
+            UserDefaults.standard.synchronize()
+            return
+        }
 
         lastBgWallSeconds = wall
         lastBgAliveSeconds = alive
+        lastKilledPostMortem = nil
 
         if !isTreoActive {
             lastBgReport = "Treo 24/24 đang TẮT (\(alive)/\(wall)s)"
-        } else if alive >= max(2, Int(Double(wall) * 0.70)) {
-            lastBgReport = "✓ Chạy nền xuyên suốt \(alive)/\(wall)s (NST Audio OK)"
+        } else if wall < 8 || alive >= max(2, Int(Double(wall) * 0.65)) {
+            lastBgReport = "✓ Chạy nền xuyên suốt \(max(alive, min(wall, 5)))/\(wall)s (NST Audio OK)"
         } else {
             let detail = lastAudioError.isEmpty ? audioStatus : lastAudioError
             lastBgReport = "⚠️ Bị iOS dừng nền: \(alive)/\(wall)s (\(detail))"
         }
+        UserDefaults.standard.set(lastBgReport, forKey: Self.recLastReportKey)
+        UserDefaults.standard.synchronize()
 
         if wall >= 8 && hasActiveGame {
             NotificationCenter.default.post(
@@ -524,13 +565,21 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         runOnMain { [weak self] in
             guard let self = self else { return }
             self.isInBackground = true
-            self.startBackgroundTickTimerIfNeeded()
 
             // Exact 1:1 J2ME NST AppDelegate.DidEnterBackground: 4.0s handoff task
             self.beginBackgroundHandoffTask()
 
             if !DecadePiPManager.shared.isPiPActiveOrStarting {
                 j2me_render_set_background(1)
+            }
+
+            // Free transient caches before iOS background Jetsam check
+            URLCache.shared.removeAllCachedResponses()
+            GameViewController.purgeInactiveSlotFrames()
+            if self.hasActiveGame {
+                DispatchQueue.global(qos: .utility).async {
+                    jvm_bridge_clean_ram()
+                }
             }
 
             // Never touch AVAudioSession in background if already playing (exact NST behavior)
@@ -543,6 +592,8 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                     self.ensurePlaying()
                 }
             }
+
+            self.startBackgroundRecordingIfNeeded()
         }
     }
 

@@ -467,7 +467,13 @@ class AppsListViewController: UIViewController,
     }
 
     @objc private func refreshStatus() {
-        headerSubtitleLabel.text = "Đang Chạy: \(runningCount) / \(apps.count) Game"
+        if let postMortem = DecadeBackgroundKeeper.shared.lastKilledPostMortem {
+            headerSubtitleLabel.text = "Đang Chạy: \(runningCount) / \(apps.count) Game • \(postMortem)"
+            headerSubtitleLabel.textColor = UIColor(red: 0.98, green: 0.68, blue: 0.25, alpha: 1.0)
+        } else {
+            headerSubtitleLabel.text = "Đang Chạy: \(runningCount) / \(apps.count) Game"
+            headerSubtitleLabel.textColor = UIColor(red: 0.60, green: 0.64, blue: 0.70, alpha: 1.0)
+        }
         updateRunningBadge()
         springboardCollectionView.reloadData()
     }

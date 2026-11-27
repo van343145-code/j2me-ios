@@ -1079,8 +1079,15 @@ s32 jthread_wakeup(Runtime *runtime) {
     return 0;
 }
 
+extern int j2me_render_is_background(void);
+
 s32 jthread_sleep(Runtime *runtime, s64 ms) {
     static const s64 PERIOD = 500;
+    // Prevent hyper-frequent 1-24ms sleep loops in background (e.g. Math.max(1, 40 - dt) when game tick
+    // overruns 40ms in interpreted miniJVM) from triggering iOS WAKEUPS_FATAL / CPU_FATAL SIGKILL.
+    if (ms > 0 && ms < 25 && j2me_render_is_background()) {
+        ms = 25;
+    }
     jthread_block_enter(runtime);
     u8 thread_status = runtime->thrd_info->thread_status;
     runtime->thrd_info->thread_status = THREAD_STATUS_SLEEPING;

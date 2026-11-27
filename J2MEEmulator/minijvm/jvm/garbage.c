@@ -376,9 +376,10 @@ s32 _gc_thread_run(void *para) {
         if (collector->lastgc == 0 || (cur_mil - collector->lastgc) >= effective_period || heap >= threshold) {
             _garbage_collect(collector);
             collector->lastgc = currentTimeMillis();
-        } else {
-            threadSleep(in_bg ? 1500 : 1000);
         }
+        // Always sleep after GC check/run so a steady live heap >= threshold never
+        // tight-loops _garbage_collect at 100% CPU (prevents iOS background CPU_FATAL SIGKILL).
+        threadSleep(in_bg ? 3000 : 1000);
     }
     collector->_garbage_thread_status = GARBAGE_THREAD_DEAD;
     thrd_exit(0);

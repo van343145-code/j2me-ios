@@ -526,7 +526,9 @@ static s32 n_setColor(Runtime *runtime, JClass *clazz) {
     RenderContext *rc = rc_acquire(handle);
     if (rc) {
         rc->currentArgb = argb;
-        setColorFromARGB(rc->ctx, argb);
+        if (!should_skip_screen_draw(rc)) {
+            setColorFromARGB(rc->ctx, argb);
+        }
     }
     rc_release(rc);
     return RUNTIME_STATUS_NORMAL;
@@ -542,7 +544,7 @@ static s32 n_setClip(Runtime *runtime, JClass *clazz) {
     if (w < 0) w = 0;
     if (h < 0) h = 0;
     RenderContext *rc = rc_acquire(handle);
-    if (rc && rc->ctx) {
+    if (rc && rc->ctx && !should_skip_screen_draw(rc)) {
         // Base state was saved at depth 1 on context creation.
         // Always restore back to base state, then push fresh GState for this clip (keeps stack depth strictly == 1).
         CGContextRestoreGState(rc->ctx);
@@ -563,7 +565,9 @@ static s32 n_setStrokeStyle(Runtime *runtime, JClass *clazz) {
     RenderContext *rc = rc_acquire(handle);
     if (rc) {
         rc->strokeStyle = style;
-        applyStrokeStyle(rc->ctx, style);
+        if (!should_skip_screen_draw(rc)) {
+            applyStrokeStyle(rc->ctx, style);
+        }
     }
     rc_release(rc);
     return RUNTIME_STATUS_NORMAL;

@@ -463,7 +463,7 @@ s32 org_mini_net_SocketNative_readByte(Runtime *runtime, JClass *clazz) {
         ret = sock_recv(vmsock, &b, 1, runtime);
         jthread_block_exit(runtime);
     }
-    push_int(runtime->stack, ret <= 0 ? -1 : (u8) b);
+    push_int(runtime->stack, ret == -2 ? -2 : (ret <= 0 ? -1 : (u8) b));
 
 #if _JVM_DEBUG_LOG_LEVEL > 5
     invoke_deepth(runtime);

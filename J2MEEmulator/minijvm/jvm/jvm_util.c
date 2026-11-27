@@ -902,10 +902,17 @@ s32 jthread_lock(MemoryBlock *mb, Runtime *runtime) { //可能会重入，同一
     s64 waitTime = currentTimeMillis();
 #endif
     struct timespec t;
-    t.tv_nsec = 5 * NANO_2_MILLS_SCALE;
-    t.tv_sec = 0;
     //can pause when lock
-    while (mtx_timedlock(&jtl->mutex_lock, &t) != thrd_success) {
+    while (1) {
+        timespec_get(&t, TIME_UTC);
+        t.tv_nsec += 5 * NANO_2_MILLS_SCALE;
+        if (t.tv_nsec >= 1000000000L) {
+            t.tv_sec += t.tv_nsec / 1000000000L;
+            t.tv_nsec %= 1000000000L;
+        }
+        if (mtx_timedlock(&jtl->mutex_lock, &t) == thrd_success) {
+            break;
+        }
         check_suspend_and_pause(runtime);
         if (runtime->thrd_info->type == THREAD_TYPE_JDWP) {
             break;

@@ -50,7 +50,7 @@ class DecadeConfigViewController: UIViewController {
     private let proxyStatusLabel = UILabel()
     private let fillScreenSwitch = UISwitch()
     private let treoSwitch = UISwitch()
-    private let locationModeSwitch = UISwitch()
+    private let exclusiveAudioSwitch = UISwitch()
     private let autoCleanRamSwitch = UISwitch()
     private let soundSwitch = UISwitch()
 
@@ -385,13 +385,13 @@ class DecadeConfigViewController: UIViewController {
         // Divider
         cardStack.addArrangedSubview(makeDivider())
 
-        // Item 2: Treo Khi Ra Ngoài (Khóa Máy Game Vẫn Chạy)
+        // Item 2: Treo Khi Ra Ngoài (Khóa Máy Game Vẫn Chạy 24/24)
         let treoRow = makeToggleRow(
             icon: "moon.fill",
             iconBg: UIColor(red: 0.88, green: 0.95, blue: 0.88, alpha: 1.0),
             iconTint: UIColor(red: 0.18, green: 0.50, blue: 0.20, alpha: 1.0),
-            title: "Treo Khi Ra Ngoài",
-            subtitle: "Khóa Máy Game Vẫn Chạy",
+            title: "Treo Khi Ra Ngoài (24/24)",
+            subtitle: "Tự Nhớ Chạy Ẩn Đa Nhiệm & Khóa Màn Hình",
             toggle: treoSwitch,
             action: #selector(treoSwitchChanged(_:))
         )
@@ -400,17 +400,17 @@ class DecadeConfigViewController: UIViewController {
         // Divider
         cardStack.addArrangedSubview(makeDivider())
 
-        // Item 2a: Treo Định Vị BTS (0% Hao Pin, Không Âm Thanh)
-        let locationRow = makeToggleRow(
-            icon: "location.fill",
+        // Item 2a: Khóa Cứng Audio Độc Quyền (Chống tắt màn mạnh nhất trên iOS 26)
+        let exclusiveRow = makeToggleRow(
+            icon: "waveform.circle.fill",
             iconBg: UIColor(red: 0.88, green: 0.93, blue: 1.0, alpha: 1.0),
             iconTint: UIColor(red: 0.10, green: 0.45, blue: 0.95, alpha: 1.0),
-            title: "Treo Định Vị BTS (0% Pin)",
-            subtitle: "Không Dùng Audio, Tiết Kiệm Pin Tối Đa",
-            toggle: locationModeSwitch,
-            action: #selector(locationModeSwitchChanged(_:))
+            title: "Khóa Cứng Audio Độc Quyền",
+            subtitle: "Tắt: Mix TikTok/YouTube · Bật: Chống Tắt Màn Tối Đa",
+            toggle: exclusiveAudioSwitch,
+            action: #selector(exclusiveAudioSwitchChanged(_:))
         )
-        cardStack.addArrangedSubview(locationRow)
+        cardStack.addArrangedSubview(exclusiveRow)
 
         // Divider
         cardStack.addArrangedSubview(makeDivider())
@@ -665,12 +665,9 @@ class DecadeConfigViewController: UIViewController {
         saveValues()
     }
 
-    @objc private func locationModeSwitchChanged(_ sender: UISwitch) {
+    @objc private func exclusiveAudioSwitchChanged(_ sender: UISwitch) {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        DecadeLocationKeeper.shared.isLocationModeActive = sender.isOn
-        if sender.isOn {
-            DecadeLocationKeeper.shared.requestPermissionIfNeeded()
-        }
+        DecadeBackgroundKeeper.shared.setExclusiveAudioMode(sender.isOn)
         saveValues()
     }
 
@@ -798,8 +795,8 @@ class DecadeConfigViewController: UIViewController {
         // Treo khi ra ngoài: Mặc định luôn là TRUE
         treoSwitch.isOn = DecadeBackgroundKeeper.shared.isTreoActive
 
-        // Treo định vị BTS: Tiết kiệm pin tối đa
-        locationModeSwitch.isOn = DecadeLocationKeeper.shared.isLocationModeActive
+        // Khóa cứng Audio độc quyền: Mặc định FALSE (Mix app khác chuẩn NST)
+        exclusiveAudioSwitch.isOn = DecadeBackgroundKeeper.shared.isExclusiveAudioMode
 
         // Co Giãn Kín Màn Hình: Mặc định tắt (FALSE) để giữ chuẩn form game gốc không méo hình
         let savedFill = defaults.object(forKey: "decade_fill_screen_\(gid)") as? Bool
@@ -832,7 +829,7 @@ class DecadeConfigViewController: UIViewController {
         j2me_render_set_fps_limit(Int32(sFps))
 
         DecadeBackgroundKeeper.shared.setTreoActive(treoSwitch.isOn)
-        defaults.set(locationModeSwitch.isOn, forKey: "decade_use_location_keepalive")
+        DecadeBackgroundKeeper.shared.setExclusiveAudioMode(exclusiveAudioSwitch.isOn)
         defaults.set(soundSwitch.isOn, forKey: "decade_game_sound")
         defaults.set(fillScreenSwitch.isOn, forKey: "decade_fill_screen_\(gid)")
         defaults.set(!fillScreenSwitch.isOn, forKey: "aspect_\(gid)")
@@ -848,7 +845,7 @@ class DecadeConfigViewController: UIViewController {
                 "scale": sRes,
                 "fps": sFps,
                 "treo": treoSwitch.isOn,
-                "locationMode": locationModeSwitch.isOn,
+                "exclusiveAudio": exclusiveAudioSwitch.isOn,
                 "cleanRam": autoCleanRamSwitch.isOn,
                 "fillScreen": fillScreenSwitch.isOn,
                 "sound": soundSwitch.isOn

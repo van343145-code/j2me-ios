@@ -356,33 +356,46 @@ class AppsListViewController: UIViewController,
     }
 
     @objc private func tabTreo247Tapped() {
-        let isTreo = DecadeBackgroundKeeper.shared.isTreoActive
-        let isAudioPlaying = DecadeBackgroundKeeper.shared.isAudioPlaying
+        let keeper = DecadeBackgroundKeeper.shared
+        let isTreo = keeper.isTreoActive
+        let isExclusive = keeper.isExclusiveAudioMode
         let hasGame = (GameViewController.currentActiveGameVC != nil)
         let netDesc = DecadeNetworkManager.shared.currentNetworkDescription()
         let ramMB = Double(jvm_bridge_get_used_ram_kb()) / 1024.0
 
         let audioState: String
-        if isAudioPlaying {
-            audioState = "ĐANG CHẠY NGẦM 24/24 ✓"
+        if keeper.isAudioPlaying {
+            audioState = "\(keeper.audioStatus) ✓"
         } else if isTreo && !hasGame {
             audioState = "Sẵn sàng (tự chạy khi mở game)"
         } else {
-            audioState = "Đang tắt"
+            audioState = keeper.audioStatus
         }
 
         let alert = UIAlertController(
-            title: "Treo Game 24/24 (Chuẩn NST)",
-            message: "• Tự nhớ chạy ẩn (Đa nhiệm & Tắt màn): \(isTreo ? "BẬT ✓" : "TẮT")\n• Luồng giữ nền Audio: \(audioState)\n• Kết nối mạng: \(netDesc)\n• RAM hiện tại: \(Int(ramMB)) MB",
+            title: "Treo Game 24/24 (AURemoteIO + NST)",
+            message: "• Tự nhớ chạy ẩn & tắt màn: \(isTreo ? "ĐANG BẬT ✓" : "ĐANG TẮT")\n• Chế độ Audio: \(keeper.audioModeDescription)\n• Lõi giữ nền: \(audioState)\n• Lần tắt màn gần nhất: \(keeper.lastBgReport)\n• Mạng: \(netDesc) • RAM: \(Int(ramMB)) MB",
             preferredStyle: .actionSheet
         )
         alert.addAction(UIAlertAction(title: isTreo ? "Tắt chế độ Treo 24/24" : "Bật chế độ Treo 24/24 (Tự nhớ vĩnh viễn)", style: .default) { _ in
-            DecadeBackgroundKeeper.shared.setTreoActive(!isTreo)
+            keeper.setTreoActive(!isTreo)
+        })
+        alert.addAction(UIAlertAction(
+            title: isExclusive
+                ? "Chuyển Audio Mix app khác (Nghe TikTok/YouTube)"
+                : "Bật Audio Độc quyền (Khóa cứng chống tắt màn tối đa)",
+            style: .default
+        ) { _ in
+            keeper.setExclusiveAudioMode(!isExclusive)
         })
         alert.addAction(UIAlertAction(title: "Dọn dẹp RAM ngay", style: .default) { _ in
-            DecadeBackgroundKeeper.shared.performRamCleanup(completion: nil)
+            keeper.performRamCleanup(completion: nil)
         })
         alert.addAction(UIAlertAction(title: "Đóng", style: .cancel))
+        if let popover = alert.popoverPresentationController {
+            popover.sourceView = bottomTabBar
+            popover.sourceRect = bottomTabBar.bounds
+        }
         present(alert, animated: true)
     }
 
@@ -751,7 +764,7 @@ class AppsListViewController: UIViewController,
     @objc private func showAuthorInfo() {
         let alert = UIAlertController(
             title: "Vạn Trần idol J2me NSV IOS",
-            message: "Ứng dụng J2ME Decade iOS Multi-Tab Engine — Native Edition.\nTác giả: Vạn Trần idol J2me NSV IOS\n• Chế độ Chơi Game Tuổi Thơ\n• Treo 24/7 Định Vị BTS 0% Hao Pin\n• Phòng chống tuyệt đối hiện tượng đơ/văng màn hình khi tắt máy\n• Giữ kết nối ngầm thông suốt không bị gián đoạn.",
+            message: "Ứng dụng jarNO1 J2ME iOS Multi-Tab Engine — Native Edition.\nTác giả: Vạn Trần idol J2me NSV IOS\n• Chế độ Chơi Game Tuổi Thơ\n• Treo 24/24 Dual-Layer Audio (AURemoteIO + NST Loop)\n• Tự nhớ chạy ẩn đa nhiệm & tắt khóa màn hình không nghỉ\n• Cửa sổ nhỏ PiP kéo to nhỏ tự do ngoài màn hình chính.",
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: "OK", style: .default))

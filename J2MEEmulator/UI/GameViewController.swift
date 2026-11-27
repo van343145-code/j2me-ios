@@ -543,6 +543,13 @@ class GameViewController: UIViewController, UITextFieldDelegate {
             name: NSNotification.Name("DecadeNetworkSwitched"),
             object: nil
         )
+        // Observe real-time background runtime proof report on unlock / return
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleBackgroundResumeReport(_:)),
+            name: DecadeBackgroundKeeper.backgroundResumeReportNotification,
+            object: nil
+        )
         _ = DecadeNetworkManager.shared // Activate smart network monitor
 
         GameViewController.currentActiveGameVC = self
@@ -1580,6 +1587,12 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         }
     }
 
+    @objc private func handleBackgroundResumeReport(_ notif: Notification) {
+        if let msg = notif.userInfo?["message"] as? String, !msg.isEmpty {
+            showToast(message: msg)
+        }
+    }
+
     @objc private func handleConfigChanged(_ notif: Notification) {
         let savedW = UserDefaults.standard.object(forKey: "resW_\(currentGameId)") as? Int ?? 0
         let savedH = UserDefaults.standard.object(forKey: "resH_\(currentGameId)") as? Int ?? 0
@@ -1765,7 +1778,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
     /// đều tự nhớ chạy ngầm liên tục không nghỉ).
     private func hideAppToBackground() {
         isKeepAwake = true
-        let wasAlreadyPlaying = DecadeBackgroundKeeper.shared.isAudioPlaying
+        let wasAlreadyPlaying = DecadeBackgroundKeeper.shared.isFullyActive
         // Permanently persist "Treo 24/24" so every future multitasking swipe or screen lock auto-remembers!
         DecadeBackgroundKeeper.shared.setTreoActive(true)
         DecadeBackgroundKeeper.shared.startKeepalive()
@@ -1773,7 +1786,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         if !DecadePiPManager.shared.isPiPActive {
             DecadePiPManager.shared.teardownPipeline()
         }
-        let delay: TimeInterval = wasAlreadyPlaying ? 0.3 : 0.5
+        let delay: TimeInterval = wasAlreadyPlaying ? 0.35 : 0.6
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             let suspendSel = NSSelectorFromString("suspend")
             if UIApplication.shared.responds(to: suspendSel) {
@@ -1791,11 +1804,11 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         DecadeBackgroundKeeper.shared.setTreoActive(next)
         if next {
             DecadeBackgroundKeeper.shared.startKeepalive()
-            showToast(message: "Treo 24/24: BẬT (Tự nhớ khi ẩn đa nhiệm & tắt màn)")
+            showToast(message: "Treo 24/24: ĐANG BẬT ✓ (Tự nhớ khi ẩn & tắt màn)")
         } else {
             dismissOledBlackOverlay()
             DecadePiPManager.shared.stopPiP()
-            showToast(message: "Treo 24/24: TẮT")
+            showToast(message: "Treo 24/24: ĐANG TẮT (Game sẽ dừng khi khóa màn)")
         }
     }
 
@@ -2230,36 +2243,46 @@ class GameViewController: UIViewController, UITextFieldDelegate {
     // ============================================================
 
     private func showToast(message: String) {
+        let container = UIView()
+        container.backgroundColor = UIColor(white: 0.96, alpha: 0.96)
+        container.layer.cornerRadius = 18
+        container.layer.shadowColor = UIColor.black.cgColor
+        container.layer.shadowOpacity = 0.22
+        container.layer.shadowRadius = 6
+        container.layer.shadowOffset = CGSize(width: 0, height: 2)
+        container.translatesAutoresizingMaskIntoConstraints = false
+
         let toast = UILabel()
         toast.text = message
-        toast.font = .systemFont(ofSize: 14, weight: .medium)
+        toast.font = .systemFont(ofSize: 13, weight: .semibold)
         toast.textColor = .black
-        toast.backgroundColor = UIColor(white: 0.95, alpha: 0.95)
         toast.textAlignment = .center
-        toast.layer.cornerRadius = 18
-        toast.clipsToBounds = true
-        toast.layer.shadowColor = UIColor.black.cgColor
-        toast.layer.shadowOpacity = 0.2
-        toast.layer.shadowRadius = 4
-        toast.layer.shadowOffset = CGSize(width: 0, height: 2)
+        toast.numberOfLines = 2
         toast.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(toast)
+        container.addSubview(toast)
+        view.addSubview(container)
 
         NSLayoutConstraint.activate([
-            toast.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            toast.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -60),
-            toast.heightAnchor.constraint(equalToConstant: 38),
-            toast.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
+            toast.topAnchor.constraint(equalTo: container.topAnchor, constant: 9),
+            toast.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -9),
+            toast.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            toast.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+
+            container.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            container.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -60),
+            container.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 16),
+            container.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -16),
+            container.widthAnchor.constraint(greaterThanOrEqualToConstant: 180),
         ])
 
-        toast.alpha = 0
+        container.alpha = 0
         UIView.animate(withDuration: 0.25, animations: {
-            toast.alpha = 1
+            container.alpha = 1
         }) { _ in
-            UIView.animate(withDuration: 0.3, delay: 2.0, options: .curveEaseOut, animations: {
-                toast.alpha = 0
+            UIView.animate(withDuration: 0.3, delay: 2.6, options: .curveEaseOut, animations: {
+                container.alpha = 0
             }) { _ in
-                toast.removeFromSuperview()
+                container.removeFromSuperview()
             }
         }
     }

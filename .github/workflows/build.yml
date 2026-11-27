@@ -101,18 +101,23 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.6-jarNO1
-          name: "jarNO1 iOS v1.0.6 (Sửa triệt để treo tắt màn 24/24 & tự nhớ chạy ẩn đa nhiệm chuẩn NST)"
+          tag_name: v1.0.7-jarNO1
+          name: "jarNO1 iOS v1.0.7 (Nâng cấp Dual-Layer Audio AURemoteIO + chống bấm nhầm tắt + báo cáo chạy nền thực tế)"
           body: |
-            ## jarNO1 iOS v1.0.6 — Treo Tắt Màn & Chạy Ẩn Đa Nhiệm 24/24 Không Nghỉ (Chuẩn J2ME NST)
-            - **Sửa triệt để lỗi khóa màn hình / ẩn đa nhiệm bị off game**:
-              - **Tách hoàn toàn `AVPictureInPictureController` / `AVSampleBufferDisplayLayer` khỏi khởi động mặc định**: chỉ tạo khi bấm `Cửa Sổ Nhỏ Ngoài Màn Hình` và giải phóng sạch khi đóng, đảm bảo phiên giữ nền là **100% pure audio-only** chuẩn `J2ME NST` — không bị iOS ngắt phiên video khi khóa màn hình.
-              - **Sửa lỗi `AVAudioPlayer.volume = 0.0` bị iOS 18/26 `mediaserverd` coi là tắt tiếng và đóng băng khi khóa màn**: phát `silent.wav` siêu trầm 16Hz (`-60 dBFS`, không nghe thấy ở mọi mức âm lượng) với `volume = 0.01` (tổng `-100 dBFS`, khác 0 cả PCM lẫn volume) + `.playback` / `.default` / `.mixWithOthers`.
-              - **Tự hồi phục khi có ngắt âm thanh / đổi thiết bị / khóa màn lặp lại**: sửa lỗi khóa vĩnh viễn cờ `interrupted = true` khi iOS không gửi `.ended`, lắng nghe đầy đủ `SceneDelegate` + `UIApplication` + `protectedDataWillBecomeUnavailableNotification` (khóa màn hình), tự gia hạn cầu nối 5 giây và kiểm tra lại mỗi 3 giây.
-              - **Tự nhớ chạy ẩn 24/24 y hệt J2ME NST**: bật `Ẩn Ứng Dụng (Chạy Ngầm)` 1 lần (hoặc giữ tích xanh `✓ Treo tắt màn 24/24` trong menu `⋮`) sẽ tự động lưu vĩnh viễn vào máy — mọi lần sau chỉ cần vuốt ẩn xuống đa nhiệm hay bấm nút nguồn tắt màn hình là game tự chạy nền liên tục 24/24 không nghỉ.
-            - **Tối ưu ổn định kết nối mạng & CPU nền**:
-              - Gỡ bỏ cờ `SO_TC_VO` dễ gây rớt NAT Wi-Fi/4G trên app non-VoIP, giữ `SO_KEEPALIVE` (20s/10s/12 lần) + `TCP_NODELAY` + chuyển `select()` sang `poll()` chống tràn `FD_SET` và xử lý an toàn `EAGAIN`/`EINTR`.
-              - Sửa lỗi tràn `tv_nsec` trong `vm_share_timedwait` (miniJVM) và thêm bộ chặn spin CPU nền trên `Canvas.repaint()`, cộng thêm bảo vệ OpenGL ES M3G khi ở nền.
+            ## jarNO1 iOS v1.0.7 — Sửa Triệt Để Lỗi Off Game Khi Ẩn Đa Nhiệm & Tắt Khóa Màn Hình
+            - **Nâng cấp lõi giữ nền Dual-Layer Audio chống đóng băng trên iOS 18/26**:
+              - **Sửa lỗi `silent.wav * volume 0.01 = 0.45 LSB` (`-97 dBFS`, bị tròn về 0)** ở bản v1.0.6 khiến `mediaserverd` coi là im lặng và đóng băng tiến trình sau 5 giây.
+              - **Lớp 1 (Mới — `AVAudioEngine` + `AVAudioSourceNode` `AURemoteIO`)**: chạy trực tiếp luồng phần cứng CoreAudio phát sóng siêu trầm 16 Hz ở mức `-50.5 dBFS` (`outputVolume = 1.0`) — hoàn toàn im lặng tuyệt đối với tai người và loa iPhone nhưng giữ kết nối phần cứng `mediaserverd` hoạt động liên tục 24/24 không ngắt quãng.
+              - **Lớp 2 (Dự phòng chuẩn NST — `AVAudioPlayer`)**: chạy song song vòng lặp `silent.wav` (16 Hz `-57 dBFS`) ở mức `volume = 1.0`, dùng đúng lệnh 2 tham số `setCategory:withOptions:error:` + `setActive:error:` khớp 1:1 với J2ME NST, tự phục hồi khi đổi route / khóa màn / cấu hình âm thanh thay đổi (`AVAudioEngineConfigurationChange`).
+              - **Thêm tùy chọn 1 chạm `Khóa Cứng Audio Độc Quyền`** trong tab `Treo 24/7` & `Cài Đặt Game` (mặc định là `Mix app khác` chuẩn NST để xem TikTok/YouTube song song; bật lên nếu muốn mức ưu tiên cao nhất khi treo khóa màn qua đêm).
+            - **Chống bấm nhầm tắt + Tự reset bật mặc định khi cài đè v1.0.7**:
+              - Nút trong menu `⋮` giờ hiển thị rõ ràng **`Treo 24/24: ĐANG BẬT ✓`** (xanh lá) / **`Treo 24/24: ĐANG TẮT`** (đỏ) để không bao giờ bị bấm nhầm tắt như trước; tự nâng cấp key lưu mới (`jarno1_treo_247_v7_off`) để bản v1.0.7 luôn mặc định **BẬT 24/24** ngay khi cài đặt.
+              - Gỡ bỏ công tắc ảo `Treo Định Vị BTS (0% Pin)` cũ không còn tác dụng trong `Cài Đặt Game`.
+            - **Đo kiểm chứng chạy nền thực tế ngay trên máy**:
+              - Mỗi lần mở khóa màn hình / quay lại app sau khi ẩn từ 8 giây trở lên, app sẽ tự hiện 1 dòng xác nhận thời gian CPU thực tế đã chạy ngầm (ví dụ: `✓ Chạy nền xuyên suốt 60/60s (Engine+Player OK)`) và lưu chi tiết trong tab `Treo 24/7`.
+            - **Sửa thêm 2 lỗi lõi native miniJVM**:
+              - Bảo toàn mã timeout `-2` trong `SocketNative.readByte` (`jni_io.c`) tránh biến timeout thành lỗi đóng kết nối.
+              - Sửa mốc thời gian tuyệt đối `TIME_UTC` cho `mtx_timedlock` trong `jthread_lock` (`jvm_util.c`) giảm spin CPU khi tranh chấp khóa.
             - Giữ nguyên **không có chế độ Bong Bóng**, chỉ giữ **Cửa Sổ Nhỏ PiP kéo to nhỏ tự do** khi bật chủ động, đóng gói **unsigned sạch 100%** (`jarNO1.ipa`).
           files: |
             jarNO1.ipa

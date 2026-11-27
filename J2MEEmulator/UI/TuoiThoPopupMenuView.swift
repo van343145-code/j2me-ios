@@ -113,7 +113,7 @@ final class TuoiThoPopupMenuView: UIView {
 
             matchContentHeight,
 
-            cardView.widthAnchor.constraint(equalToConstant: 232),
+            cardView.widthAnchor.constraint(equalToConstant: 248),
             cardView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
             cardView.topAnchor.constraint(equalTo: safeAreaLayoutGuide.topAnchor, constant: 48),
             cardView.bottomAnchor.constraint(lessThanOrEqualTo: safeAreaLayoutGuide.bottomAnchor, constant: -12)
@@ -205,14 +205,15 @@ final class TuoiThoPopupMenuView: UIView {
         )
         contentStack.addArrangedSubview(btnOledSleep)
 
-        // 4e. Treo 24/24 tắt màn & ẩn đa nhiệm (tự nhớ vĩnh viễn giống ✓ Treo tắt màn của J2ME NST)
+        // 4e. Treo 24/24 tắt màn & ẩn đa nhiệm (hiển thị rõ ĐANG BẬT ✓ / ĐANG TẮT để tránh bấm nhầm tắt)
         let btnTreo247 = makeMenuItem(
-            iconName: isTreo247Active ? "checkmark.circle.fill" : "circle",
-            iconColor: isTreo247Active ? UIColor(red: 0.13, green: 0.62, blue: 0.30, alpha: 1.0) : UIColor(white: 0.55, alpha: 1.0),
-            title: isTreo247Active ? "✓ Treo tắt màn 24/24" : "Treo tắt màn 24/24",
+            iconName: isTreo247Active ? "checkmark.circle.fill" : "xmark.circle",
+            iconColor: isTreo247Active ? UIColor(red: 0.13, green: 0.62, blue: 0.30, alpha: 1.0) : UIColor(red: 0.75, green: 0.25, blue: 0.22, alpha: 1.0),
+            title: isTreo247Active ? "Treo 24/24: ĐANG BẬT ✓" : "Treo 24/24: ĐANG TẮT",
             action: #selector(handleToggleTreo247)
         )
         self.treo247Btn = btnTreo247
+        updateTreo247Appearance()
         contentStack.addArrangedSubview(btnTreo247)
 
         // 4f. Ẩn Ứng Dụng chạy ngầm (giống J2ME NST HideApp: tự bật & nhớ chạy ẩn 24/24 vĩnh viễn)
@@ -333,12 +334,16 @@ final class TuoiThoPopupMenuView: UIView {
         guard let btn = treo247Btn else { return }
         for sub in btn.subviews {
             if let lbl = sub as? UILabel {
-                lbl.text = isTreo247Active ? "✓ Treo tắt màn 24/24" : "Treo tắt màn 24/24"
+                lbl.text = isTreo247Active ? "Treo 24/24: ĐANG BẬT ✓" : "Treo 24/24: ĐANG TẮT"
+                lbl.font = .systemFont(ofSize: 15, weight: isTreo247Active ? .semibold : .regular)
+                lbl.textColor = isTreo247Active
+                    ? UIColor(red: 0.10, green: 0.52, blue: 0.24, alpha: 1.0)
+                    : UIColor(red: 0.65, green: 0.22, blue: 0.20, alpha: 1.0)
             } else if let iv = sub as? UIImageView {
-                iv.image = UIImage(systemName: isTreo247Active ? "checkmark.circle.fill" : "circle")
+                iv.image = UIImage(systemName: isTreo247Active ? "checkmark.circle.fill" : "xmark.circle")
                 iv.tintColor = isTreo247Active
                     ? UIColor(red: 0.13, green: 0.62, blue: 0.30, alpha: 1.0)
-                    : UIColor(white: 0.55, alpha: 1.0)
+                    : UIColor(red: 0.75, green: 0.25, blue: 0.22, alpha: 1.0)
             }
         }
     }

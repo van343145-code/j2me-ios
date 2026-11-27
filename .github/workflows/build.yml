@@ -100,16 +100,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.4-jarNO1
-          name: "jarNO1 iOS v1.0.4 (Fix 1:1 Ẩn Ứng Dụng & Treo Chạy Nền chuẩn J2ME NST 1.0.0)"
+          tag_name: v1.0.5-jarNO1
+          name: "jarNO1 iOS v1.0.5 (Bỏ chế độ Bong Bóng — Chỉ giữ Cửa Sổ Nhỏ PiP kéo to nhỏ ngoài màn hình chính)"
           body: |
-            ## jarNO1 iOS v1.0.4 — Fix 1:1 Ẩn Ứng Dụng & Treo Chạy Nền chuẩn J2ME NST 1.0.0.ipa
-            - **Khắc phục triệt để lỗi ẩn app / thoát ra ngoài là mất kết nối game** (đối chiếu ARM64 trực tiếp với `J2ME_NST_1.0.0.ipa`):
-              - Mặc định **BẬT Treo 24/24 (`isTreoActive = true` qua key đảo ngược `jarno1_sticky_off`, khớp 1:1 `App.Sticky` của `J2ME NST`)**: `AVAudioPlayer` (`background-loop.wav`, `.playback` + `.mixWithOthers`, `volume = 0.0`) được khởi chạy ngay khi vào game lúc app đang mở (foreground), đảm bảo iOS cấp quyền chạy nền trước khi bấm **Ẩn Ứng Dụng**, vuốt Home hay khóa màn hình.
-              - Thêm guard chặn gọi lại `AVAudioSession.setCategory` / `setActive(true)` khi `audioPlayer.isPlaying == true` và bỏ đăng ký trùng lặp `didEnterBackgroundNotification` giữa `SceneDelegate` & `NotificationCenter` (nguyên nhân làm ngắt audio session đúng lúc chuyển nền ở bản v1.0.3).
-              - Bổ sung timer bàn giao `beginBackgroundTask` 4.0 giây rồi `endBackgroundTask` sạch sẽ (khớp 1:1 `AppDelegate.DidEnterBackground` của `J2ME NST`).
-              - Tắt `canStartPictureInPictureAutomaticallyFromInline` và bỏ cờ `.allowBluetooth` sai chuẩn trên category `.playback` trong `DecadePiPManager` để không xung đột audio khi ẩn app.
-              - Sửa `forceExitGame()` chỉ dừng audio keepalive, không còn xóa mất thiết lập `Treo Khi Ra Ngoài` đã lưu.
-            - Giữ nguyên toàn bộ cải tiến từ v1.0.3: lõi native `miniJVM` + UI `J2ME Decade`, fix tự mở Hành trang, lõi mát máy 30 FPS / event-driven `waitForInput`, đóng gói **unsigned sạch 100%** (`jarNO1.ipa`).
+            ## jarNO1 iOS v1.0.5 — Bỏ Chế Độ Bong Bóng, Tối Ưu Cửa Sổ Nhỏ Ngoài Màn Hình Chính (PiP)
+            - **Xóa hoàn toàn chế độ Bong Bóng (`DecadeFloatingBubble`, `isBubbleMode` trong PiP và cửa sổ mini trong app)**:
+              - Chạm vào nút điều khiển trên cửa sổ PiP không bao giờ biến màn hình game thành vòng tròn bong bóng nữa.
+              - Bật `Ngủ Ẩn (Tắt Màn Đen)` không còn hiện bong bóng nổi gây vướng.
+            - **Tối ưu chế độ Cửa Sổ Nhỏ Ngoài Màn Hình Chính (PiP kéo to nhỏ tự do)**:
+              - Thêm nút **`Cửa Sổ Nhỏ Ngoài Màn Hình`** ngay trong menu **`⋮`** — 1 chạm bật cửa sổ PiP và tự thu gọn ra màn hình chính, xem game trực tiếp đè lên Home Screen / Facebook / TikTok / Safari, kéo di chuyển & dùng 2 ngón tay phóng to thu nhỏ tuỳ ý.
+              - Bơm sẵn khung hình thực kèm cờ `kCMSampleAttachmentKey_DisplayImmediately` trước khi gọi `startPictureInPicture()` và giữ luồng render hoạt động suốt quá trình chuyển nền (`isPiPActiveOrStarting`), khắc phục triệt để tình trạng PiP đen hình hoặc không lên khung hình.
+              - Giữ nguyên nút **`Ẩn Ứng Dụng (Chạy Ngầm)`** ẩn gọn sạch không toast chẩn đoán (chuẩn 1:1 `J2ME NST`), lõi mát máy 30 FPS & đóng gói **unsigned sạch 100%** (`jarNO1.ipa`).
           files: |
             jarNO1.ipa

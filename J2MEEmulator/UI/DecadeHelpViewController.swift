@@ -93,13 +93,13 @@ class DecadeHelpViewController: UIViewController {
         ))
 
         stack.addArrangedSubview(makeSectionCard(
-            title: "7. Cửa sổ nổi PiP ngoài màn hình & Cửa sổ nhỏ thu phóng",
-            content: "• Cửa sổ nổi ngoài màn hình (PiP): Tự động hiện khi chuyển ứng dụng hoặc chọn trong menu. Có thể xem game chạy trực tiếp khi đang ở màn hình chính hoặc lướt Facebook, TikTok, Safari.\n• Cửa sổ nhỏ kéo to nhỏ tuỳ ý (Mini Window): Cửa sổ mini trong ứng dụng, có thể dùng 2 ngón tay kéo to nhỏ (pinch) hoặc kéo góc dưới bên phải để chỉnh kích thước tuỳ thích."
+            title: "7. Cửa sổ nhỏ ngoài màn hình chính (PiP)",
+            content: "• Bấm [⋮] -> chọn 'Cửa Sổ Nhỏ Ngoài Màn Hình' để thu game thành cửa sổ nhỏ chạy trực tiếp ngoài màn hình chính và đè lên các ứng dụng khác (Facebook, Zalo, TikTok, Safari...).\n• Dùng 2 ngón tay kéo phóng to / thu nhỏ tuỳ ý hoặc kéo trượt cửa sổ tới bất kỳ vị trí nào trên màn hình.\n• Chạm vào biểu tượng mở rộng trên cửa sổ nhỏ để quay lại toàn màn hình game."
         ))
 
         stack.addArrangedSubview(makeSectionCard(
-            title: "8. Thông tin tác giả",
-            content: "• Tác giả: Vạn Trần idol J2me NSV IOS\n• Phiên bản: J2ME Decade iOS v2.0 Native\n• Tính năng nổi bật: Chơi và treo nhiều nick Ninja School Online (NSO), hỗ trợ chạy nền, PiP ngoài màn hình đè ứng dụng khác, cửa sổ nhỏ kéo to nhỏ tuỳ ý."
+            title: "8. Thông tin ứng dụng",
+            content: "• Ứng dụng: jarNO1 iOS Native (miniJVM + Lõi tối ưu mát máy chuẩn J2ME NST)\n• Tính năng nổi bật: Chơi và treo nhiều tab game J2ME, ẩn chạy ngầm tàng hình 24/24, cửa sổ nhỏ PiP kéo to nhỏ tự do ngoài màn hình chính."
         ))
     }
 

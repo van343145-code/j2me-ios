@@ -209,22 +209,8 @@ final class DecadeMiniWindow: UIView, UIGestureRecognizerDelegate {
     }
 
     func show(in window: UIWindow?) {
-        guard let window = window else { return }
-        if superview == nil {
-            let screen = window.bounds
-            let initialW: CGFloat = 240
-            let initialH: CGFloat = 180
-            frame = CGRect(x: screen.width - initialW - 16, y: 110, width: initialW, height: initialH)
-            alpha = 0.0
-            transform = CGAffineTransform(scaleX: 0.7, y: 0.7)
-            window.addSubview(self)
-            UIView.animate(withDuration: 0.3, delay: 0, usingSpringWithDamping: 0.75, initialSpringVelocity: 0.5, options: .curveEaseOut, animations: {
-                self.alpha = 1.0
-                self.transform = .identity
-            })
-        }
-        window.bringSubviewToFront(self)
-        isHidden = false
+        // In-app mini-window / bubble disabled — using only resizable outside-Home-Screen PiP window.
+        isHidden = true
     }
 
     func hide() {

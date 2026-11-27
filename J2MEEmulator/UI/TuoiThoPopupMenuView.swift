@@ -19,6 +19,7 @@ final class TuoiThoPopupMenuView: UIView {
     var onOpenNativeKeyboard: (() -> Void)?
     var onToggleSplitView: (() -> Void)?
     var onOledSleepMode: (() -> Void)?
+    var onTogglePiP: (() -> Void)?
     var onHideApp: (() -> Void)?
     var onRestartGame: (() -> Void)?
     var onBackToList: (() -> Void)?
@@ -196,7 +197,16 @@ final class TuoiThoPopupMenuView: UIView {
         )
         contentStack.addArrangedSubview(btnOledSleep)
 
-        // 4e. Ẩn Ứng Dụng chạy ngầm (giống J2ME NST HideApp)
+        // 4e. Cửa Sổ Nhỏ Ngoài Màn Hình Chính (PiP kéo to nhỏ tự do)
+        let btnPiP = makeMenuItem(
+            iconName: "pip.enter",
+            iconColor: UIColor(red: 0.10, green: 0.46, blue: 0.88, alpha: 1.0),
+            title: "Cửa Sổ Nhỏ Ngoài Màn Hình",
+            action: #selector(handleTogglePiP)
+        )
+        contentStack.addArrangedSubview(btnPiP)
+
+        // 4f. Ẩn Ứng Dụng chạy ngầm (giống J2ME NST HideApp)
         let btnHideApp = makeMenuItem(
             iconName: "eye.slash.circle.fill",
             iconColor: UIColor(red: 0.08, green: 0.56, blue: 0.46, alpha: 1.0),
@@ -360,6 +370,12 @@ final class TuoiThoPopupMenuView: UIView {
     @objc private func handleOledSleep() {
         dismissMenu { [weak self] in
             self?.onOledSleepMode?()
+        }
+    }
+
+    @objc private func handleTogglePiP() {
+        dismissMenu { [weak self] in
+            self?.onTogglePiP?()
         }
     }
 

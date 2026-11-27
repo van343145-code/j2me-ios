@@ -105,23 +105,8 @@ final class DecadeFloatingBubble: UIView {
     }
 
     func show(in window: UIWindow?) {
-        guard let window = window else { return }
-        if superview == nil {
-            let screen = window.bounds
-            let initialX = screen.width - 64
-            let initialY = max(80, screen.height * 0.25)
-            frame = CGRect(x: initialX, y: initialY, width: 54, height: 54)
-            alpha = 0.0
-            transform = CGAffineTransform(scaleX: 0.6, y: 0.6)
-            window.addSubview(self)
-
-            UIView.animate(withDuration: 0.35, delay: 0, usingSpringWithDamping: 0.7, initialSpringVelocity: 0.5, options: .curveEaseOut, animations: {
-                self.alpha = 1.0
-                self.transform = .identity
-            })
-        }
-        window.bringSubviewToFront(self)
-        isHidden = false
+        // Bubble mode disabled — using only resizable outside-Home-Screen PiP small window.
+        isHidden = true
     }
 
     func hide() {

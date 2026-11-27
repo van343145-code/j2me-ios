@@ -379,7 +379,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             // Short 4s handoff task matching J2ME NST AppDelegate.DidEnterBackground
             self.beginBackgroundHandoffTask()
 
-            if !DecadePiPManager.shared.isPiPActive {
+            if !DecadePiPManager.shared.isPiPActiveOrStarting {
                 j2me_render_set_background(1)
             }
 

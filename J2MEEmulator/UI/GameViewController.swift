@@ -161,7 +161,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
                 vc.isAppInBackground = false
             }
             if vc.isAppInBackground {
-                if let frame = frame, DecadePiPManager.shared.isPiPActive {
+                if let frame = frame, DecadePiPManager.shared.isPiPActiveOrStarting {
                     DecadePiPManager.shared.updateFrame(frame)
                 }
                 return
@@ -180,11 +180,8 @@ class GameViewController: UIViewController, UITextFieldDelegate {
             }
 
             if let frame = frame {
-                if DecadePiPManager.shared.isPiPActive {
+                if DecadePiPManager.shared.isPiPActiveOrStarting {
                     DecadePiPManager.shared.updateFrame(frame)
-                }
-                if DecadeMiniWindow.shared.superview != nil && !DecadeMiniWindow.shared.isHidden {
-                    DecadeMiniWindow.shared.updateFrame(frame)
                 }
             }
             if let icon = vc.placeholderIconView, icon.alpha > 0 {
@@ -305,6 +302,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         }
     }
     static var isOledSleepingActive = false
+    private var shouldSuspendOnPiPStart = false
     private var isAutoCleanRam = true
     private var isKeypadHidden = false
     private var keypadCurrentHeight: CGFloat = 280
@@ -469,14 +467,42 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         j2me_ui_set_callback(gameUICallback)
         activeGameViewController = self
 
-        // Setup isolated Picture-in-Picture host view (prevents double screen overlapping bug)
-        pipHostView.frame = CGRect(x: 0, y: 0, width: 2, height: 2)
+        // Setup isolated Picture-in-Picture host view (4:3 behind game canvas for smooth PiP animation)
+        pipHostView.frame = CGRect(x: 0, y: 0, width: 160, height: 120)
         pipHostView.alpha = 0.01
         pipHostView.isUserInteractionEnabled = false
         view.insertSubview(pipHostView, at: 0)
 
         DecadePiPManager.shared.setup(sourceView: pipHostView)
         DecadePiPManager.shared.setGameInfo(name: appName, icon: appIcon, tabNumber: activeTabIndex + 1)
+        DecadePiPManager.shared.onPiPStateChanged = { [weak self] active in
+            guard let self = self else { return }
+            if active {
+                j2me_render_set_background(0)
+                j2me_input_post_repaint()
+                if self.shouldSuspendOnPiPStart {
+                    self.shouldSuspendOnPiPStart = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        let suspendSel = NSSelectorFromString("suspend")
+                        if UIApplication.shared.responds(to: suspendSel) {
+                            UIApplication.shared.perform(suspendSel)
+                        }
+                    }
+                }
+            } else {
+                self.shouldSuspendOnPiPStart = false
+                if self.isAppInBackground || self.isOledSleeping {
+                    j2me_render_set_background(1)
+                } else {
+                    j2me_render_set_background(0)
+                    j2me_input_post_repaint()
+                }
+            }
+        }
+        DecadePiPManager.shared.onPiPFailed = { [weak self] error in
+            self?.shouldSuspendOnPiPStart = false
+            self?.showToast(message: "Không mở được cửa sổ nhỏ ngoài màn hình (\(error.localizedDescription))")
+        }
 
         // Observe app lifecycle for background power & connection preservation
         NotificationCenter.default.addObserver(
@@ -538,7 +564,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        pipHostView.frame = CGRect(x: 0, y: 0, width: 2, height: 2)
+        pipHostView.frame = CGRect(x: 0, y: 0, width: 160, height: 120)
         DecadePiPManager.shared.updateLayout()
     }
 
@@ -1359,6 +1385,9 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         popup.onOledSleepMode = { [weak self] in
             self?.enterOledSleepMode()
         }
+        popup.onTogglePiP = { [weak self] in
+            self?.openFloatingPiPWindow()
+        }
         popup.onHideApp = { [weak self] in
             self?.hideAppToBackground()
         }
@@ -1690,7 +1719,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         DecadeBackgroundKeeper.shared.setTreoActive(true)
         DecadeBackgroundKeeper.shared.startKeepalive()
         isOledSleeping = true
-        if !DecadePiPManager.shared.isPiPActive {
+        if !DecadePiPManager.shared.isPiPActiveOrStarting {
             j2me_render_set_background(1)
         }
         if let win = view.window {
@@ -1698,10 +1727,24 @@ class GameViewController: UIViewController, UITextFieldDelegate {
             if oledBlackOverlay.superview == nil {
                 win.addSubview(oledBlackOverlay)
             }
-            setupFloatingBubble()
-            DecadeFloatingBubble.shared.show(in: win)
-            win.bringSubviewToFront(DecadeFloatingBubble.shared)
         }
+    }
+
+    /// Mở cửa sổ nhỏ nổi ngoài màn hình chính (iOS PiP kéo to nhỏ tự do bằng 2 ngón, không có chế độ bong bóng)
+    private func openFloatingPiPWindow() {
+        isKeepAwake = true
+        if !DecadeBackgroundKeeper.shared.isTreoActive {
+            DecadeBackgroundKeeper.shared.setTreoActive(true)
+        }
+        DecadeBackgroundKeeper.shared.startKeepalive()
+        if DecadePiPManager.shared.isPiPActive {
+            DecadePiPManager.shared.stopPiP()
+            showToast(message: "Đã đóng cửa sổ nhỏ ngoài màn hình")
+            return
+        }
+        shouldSuspendOnPiPStart = true
+        let initialFrame = cachedFrame(for: activeSlot)
+        DecadePiPManager.shared.startPiP(initialFrame: initialFrame)
     }
 
     /// Ẩn ứng dụng xuống nền iOS (khớp 1:1 J2ME NST MicroController.HideApp:
@@ -1713,12 +1756,6 @@ class GameViewController: UIViewController, UITextFieldDelegate {
             DecadeBackgroundKeeper.shared.setTreoActive(true)
         }
         DecadeBackgroundKeeper.shared.startKeepalive()
-        let status = DecadeBackgroundKeeper.shared.audioStatus
-        if status == "playing" {
-            showToast(message: "Đang ẩn chạy nền (Audio: OK)...")
-        } else {
-            showToast(message: "Đang ẩn chạy nền (\(status))...")
-        }
         let delay: TimeInterval = wasAlreadyPlaying ? 0.3 : 0.5
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             let suspendSel = NSSelectorFromString("suspend")
@@ -1730,85 +1767,13 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         }
     }
 
-    private func setupFloatingBubble() {
-        let currentTabName = (activeTabIndex < tabSessions.count) ? tabSessions[activeTabIndex].appName : appName
-        DecadeFloatingBubble.shared.setGameInfo(name: currentTabName, icon: appIcon, tabNumber: activeTabIndex + 1)
-        DecadeFloatingBubble.shared.onRestoreGame = { [weak self] in
-            self?.dismissOledBlackOverlay()
-        }
-        DecadeFloatingBubble.shared.onToggleHeadless = { [weak self] in
-            guard let self = self else { return }
-            if self.oledBlackOverlay.superview != nil {
-                self.dismissOledBlackOverlay()
-            } else {
-                self.enterOledSleepMode()
-            }
-        }
-        DecadeFloatingBubble.shared.onSelectTabPrompt = { [weak self] in
-            self?.promptSwitchTab()
-        }
-        DecadeFloatingBubble.shared.onAssignProxy = { [weak self] in
-            self?.promptAssignProxyForCurrentTab()
-        }
-        DecadeFloatingBubble.shared.onToggleTreo = { [weak self] in
-            self?.toggleTreoTatMan()
-        }
-        DecadeFloatingBubble.shared.onTogglePiP = {
-            DecadePiPManager.shared.togglePiP()
-        }
-        DecadeFloatingBubble.shared.onToggleMiniWindow = { [weak self] in
-            guard let self = self else { return }
-            DecadeFloatingBubble.shared.hide()
-            DecadeMiniWindow.shared.setTabInfo(tabNumber: self.activeTabIndex + 1)
-            DecadeMiniWindow.shared.show(in: self.view.window)
-        }
-        DecadeMiniWindow.shared.onMinimizeToBubble = { [weak self] in
-            guard let self = self else { return }
-            DecadeMiniWindow.shared.hide()
-            DecadeFloatingBubble.shared.setGameInfo(name: self.appName, icon: self.appIcon, tabNumber: self.activeTabIndex + 1)
-            DecadeFloatingBubble.shared.show(in: self.view.window)
-        }
-        DecadeMiniWindow.shared.onTogglePiP = {
-            DecadePiPManager.shared.togglePiP()
-        }
-        DecadeMiniWindow.shared.onSwitchTab = { [weak self] in
-            guard let self = self, self.tabButtons.count > 1 else { return }
-            let nextTab = (self.activeTabIndex + 1) % self.tabButtons.count
-            self.selectTab(at: nextTab)
-        }
-        DecadeMiniWindow.shared.onShowMenu = {
-            DecadeFloatingBubble.shared.showActionSheetMenu()
-        }
-    }
-
-    private func promptSwitchTab() {
-        let alert = UIAlertController(title: "Chọn Tab Midlet", message: "Đang mở \(tabButtons.count) tab:", preferredStyle: .actionSheet)
-        for i in 0..<tabButtons.count {
-            let isCurrent = (i == activeTabIndex)
-            let tabTitle = (isCurrent ? "⦿ Tab \(i + 1) (Hiện tại)" : "○ Tab \(i + 1)")
-            alert.addAction(UIAlertAction(title: tabTitle, style: .default) { [weak self] _ in
-                self?.selectTab(at: i)
-            })
-        }
-        alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
-        if let popover = alert.popoverPresentationController {
-            popover.sourceView = DecadeFloatingBubble.shared
-            popover.sourceRect = DecadeFloatingBubble.shared.bounds
-        }
-        present(alert, animated: true)
-    }
-
     private func toggleTreoTatMan() {
         isKeepAwake.toggle()
         DecadeBackgroundKeeper.shared.setTreoActive(isKeepAwake)
         if isKeepAwake {
-            enterOledSleepMode()
-            DecadePiPManager.shared.startPiP()
-            showToast(message: "Đã bật treo & Cửa sổ nổi ngoài màn hình")
+            openFloatingPiPWindow()
         } else {
             dismissOledBlackOverlay()
-            DecadeFloatingBubble.shared.hide()
-            DecadeMiniWindow.shared.hide()
             DecadePiPManager.shared.stopPiP()
             showToast(message: "Đã tắt treo tắt màn")
         }

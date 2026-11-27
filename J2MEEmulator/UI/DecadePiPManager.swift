@@ -2,10 +2,10 @@
 //  DecadePiPManager.swift
 //  J2MEEmulator
 //
-//  Created for Vạn Trần idol J2me NSV IOS
-//  Picture-in-Picture (PiP) manager with AVSampleBufferDisplayLayer.
-//  Enables live game video floating outside the app over Home Screen and other apps.
-//  Supports dragging anywhere and pinch-to-resize freely ("kéo to nhỏ tuỳ ý ngoài màn hình").
+//  Picture-in-Picture (PiP) manager using AVSampleBufferDisplayLayer.
+//  Provides ONLY the live resizable floating small game window outside the app
+//  on the Home Screen and over other apps (drag anywhere + pinch to resize freely).
+//  Bubble mode has been completely removed.
 //
 
 import UIKit
@@ -25,14 +25,20 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
     private var lastPoolSize: CGSize = .zero
     private var lastFrameTime: CFTimeInterval = 0
     private var hasEnqueuedInitialFrame = false
+    private(set) var isPiPStarting = false
 
     var isPiPActive: Bool {
         return pipController?.isPictureInPictureActive ?? false
     }
 
-    var onPiPStateChanged: ((Bool) -> Void)?
+    var isPiPActiveOrStarting: Bool {
+        return isPiPActive || isPiPStarting
+    }
 
-    var gameName: String = "J2ME Game"
+    var onPiPStateChanged: ((Bool) -> Void)?
+    var onPiPFailed: ((Error) -> Void)?
+
+    var gameName: String = "jarNO1"
     var gameIcon: UIImage?
     var currentTab: Int = 1
 
@@ -42,22 +48,18 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         self.currentTab = tabNumber
     }
 
-    private func getLogoCGImage(fallback: CGImage) -> CGImage {
-        return gameIcon?.cgImage ?? fallback
-    }
-
     override init() {
         super.init()
     }
 
     func setupAudioSession() {
-        // Never disrupt DecadeBackgroundKeeper's live .playback + .mixWithOthers session!
+        // Ensure DecadeBackgroundKeeper's live .playback + .mixWithOthers session is active
         if DecadeBackgroundKeeper.shared.isAudioPlaying {
             return
         }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+            try session.setCategory(.playback, options: [.mixWithOthers])
             try session.setActive(true)
         } catch {
             print("[PiP] AudioSession error: \(error)")
@@ -89,8 +91,8 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
 
         let controller = AVPictureInPictureController(contentSource: contentSource)
         controller.delegate = self
-        // CRITICAL: Keep inline auto-PiP OFF so backgrounding / HideApp ("suspend")
-        // never triggers empty-layer media arbitration that interrupts BackgroundAudio!
+        // Keep inline auto-PiP off so normal NST invisible hide ("Ẩn ứng dụng") stays silent;
+        // PiP opens cleanly on demand via "Cửa Sổ Nhỏ Ngoài Màn Hình".
         controller.canStartPictureInPictureAutomaticallyFromInline = false
         controller.requiresLinearPlayback = true
         if controller.responds(to: Selector(("setControlsStyle:"))) {
@@ -105,40 +107,88 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         displayLayer.frame = sourceView.bounds
     }
 
-    func startPiP() {
-        setupAudioSession()
-        guard let controller = pipController else {
-            print("[PiP] Controller is nil")
+    /// Starts the outside-app resizable PiP small window, priming AVSampleBufferDisplayLayer first
+    /// so iOS immediately receives a live video frame before transitioning into PiP.
+    func startPiP(initialFrame: CGImage? = nil) {
+        guard AVPictureInPictureController.isPictureInPictureSupported() else {
+            let err = NSError(domain: "DecadePiP", code: -1, userInfo: [NSLocalizedDescriptionKey: "Thiết bị không hỗ trợ Hình trong hình (PiP)"])
+            onPiPFailed?(err)
             return
         }
-        if !controller.isPictureInPictureActive {
-            controller.startPictureInPicture()
+        guard let controller = pipController else {
+            let err = NSError(domain: "DecadePiP", code: -2, userInfo: [NSLocalizedDescriptionKey: "PiP chưa được khởi tạo"])
+            onPiPFailed?(err)
+            return
+        }
+        if controller.isPictureInPictureActive {
+            onPiPStateChanged?(true)
+            return
+        }
+
+        setupAudioSession()
+        isPiPStarting = true
+        j2me_render_set_background(0)
+
+        // Prime displayLayer synchronously with a valid sample buffer before calling startPictureInPicture()
+        if let frame = initialFrame {
+            enqueueFrameSynchronously(frame)
+        } else if let fallback = makeBlackFallbackImage() {
+            enqueueFrameSynchronously(fallback)
+        }
+        controller.invalidatePlaybackState()
+
+        // Allow one CoreAnimation commit tick so AVSampleBufferDisplayLayer registers the primed frame
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) { [weak self] in
+            guard let self = self, let ctrl = self.pipController, self.isPiPStarting else { return }
+            if !ctrl.isPictureInPictureActive {
+                ctrl.startPictureInPicture()
+            }
         }
     }
 
     func stopPiP() {
+        isPiPStarting = false
         if let controller = pipController, controller.isPictureInPictureActive {
             controller.stopPictureInPicture()
         }
     }
 
-    func togglePiP() {
+    func togglePiP(initialFrame: CGImage? = nil) {
         if isPiPActive {
             stopPiP()
         } else {
-            startPiP()
+            startPiP(initialFrame: initialFrame)
         }
     }
 
     // MARK: - Frame Enqueueing
+
+    private func enqueueFrameSynchronously(_ cgImage: CGImage) {
+        guard let sampleBuffer = createSampleBuffer(from: cgImage) else { return }
+        let work = {
+            if self.displayLayer.status == .failed {
+                self.displayLayer.flush()
+            }
+            if self.displayLayer.isReadyForMoreMediaData {
+                self.displayLayer.enqueue(sampleBuffer)
+                self.hasEnqueuedInitialFrame = true
+                self.lastFrameTime = CACurrentMediaTime()
+            }
+        }
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.sync(execute: work)
+        }
+    }
+
     func updateFrame(_ cgImage: CGImage) {
-        // CRITICAL: Never allocate CVPixelBuffer/IOSurface/CMSampleBuffer when PiP is NOT active!
-        // Previously running 30fps while PiP was off leaked ~65 MB/s of IOSurface memory.
-        guard isPiPActive else { return }
+        // Never allocate CVPixelBuffer/IOSurface when PiP is completely off
+        guard isPiPActiveOrStarting else { return }
 
         let now = CACurrentMediaTime()
         if hasEnqueuedInitialFrame {
-            guard (now - lastFrameTime) >= 0.05 else { return } // 20 FPS max for PiP
+            guard (now - lastFrameTime) >= 0.066 else { return } // ~15 FPS smooth & cool for PiP
         }
         lastFrameTime = now
         hasEnqueuedInitialFrame = true
@@ -146,7 +196,7 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         guard let sampleBuffer = createSampleBuffer(from: cgImage) else { return }
 
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, self.isPiPActive else { return }
+            guard let self = self, self.isPiPActiveOrStarting else { return }
             if self.displayLayer.status == .failed {
                 self.displayLayer.flush()
             }
@@ -157,14 +207,30 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
     }
 
     func purgeBuffers() {
-        guard !isPiPActive else { return }
+        guard !isPiPActiveOrStarting else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self = self, !self.isPiPActive else { return }
+            guard let self = self, !self.isPiPActiveOrStarting else { return }
             self.displayLayer.flush()
             self.pixelBufferPool = nil
             self.lastPoolSize = .zero
             self.hasEnqueuedInitialFrame = false
         }
+    }
+
+    private func makeBlackFallbackImage() -> CGImage? {
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil,
+            width: 320,
+            height: 240,
+            bitsPerComponent: 8,
+            bytesPerRow: 320 * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else { return nil }
+        ctx.setFillColor(red: 0, green: 0, blue: 0, alpha: 1)
+        ctx.fill(CGRect(x: 0, y: 0, width: 320, height: 240))
+        return ctx.makeImage()
     }
 
     private func getPixelBuffer(width: Int, height: Int) -> CVPixelBuffer? {
@@ -203,32 +269,24 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         let origW = cgImage.width
         let origH = cgImage.height
 
-        // Portrait 3:4 video (240x320) is severely restricted by iOS PiP size limits.
-        // Expanding the container to 4:3 landscape ratio allows iOS PiP to expand
-        // to the FULL WIDTH of the iPhone screen, unlocking free multi-size resizing!
+        // Portrait 3:4 video (e.g. 240x320) is tightly capped by iOS PiP size limits.
+        // Expanding the container to 4:3 landscape unlocks FULL free pinch-to-resize
+        // from tiny corner window up to full iPhone screen width outside on the Home Screen!
         let targetW: Int
         let targetH: Int
         let drawX: Int
         let drawY: Int
 
-        if isBubbleMode {
-            // 1:1 Compact Bubble Aspect Ratio: shrinks the entire PiP window into a tight bubble!
-            targetW = 160
-            targetH = 160
-            drawX = 0
+        if origW < origH {
+            targetH = origH
+            targetW = max(origW, (origH * 4) / 3)
+            drawX = (targetW - origW) / 2
             drawY = 0
         } else {
-            if origW < origH {
-                targetH = origH
-                targetW = max(origW, (origH * 4) / 3)
-                drawX = (targetW - origW) / 2
-                drawY = 0
-            } else {
-                targetW = origW
-                targetH = origH
-                drawX = 0
-                drawY = 0
-            }
+            targetW = origW
+            targetH = origH
+            drawX = 0
+            drawY = 0
         }
 
         guard let buffer = getPixelBuffer(width: targetW, height: targetH) else { return nil }
@@ -250,58 +308,13 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
             bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
         ) else { return nil }
 
-        if isBubbleMode {
-            // Fill background with clean black
-            context.setFillColor(red: 0.0, green: 0.0, blue: 0.0, alpha: 1.0)
-            context.fill(CGRect(x: 0, y: 0, width: 160, height: 160))
+        // Clear container background with clean black
+        context.setFillColor(red: 0, green: 0, blue: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: targetW, height: targetH))
 
-            let centerX: CGFloat = 80.0
-            let centerY: CGFloat = 80.0
-            let bubbleRadius: CGFloat = 72.0
-
-            // Glowing cyan outer ring
-            context.setStrokeColor(red: 0.13, green: 0.59, blue: 0.95, alpha: 0.45)
-            context.setLineWidth(8.0)
-            context.strokeEllipse(in: CGRect(x: centerX - bubbleRadius, y: centerY - bubbleRadius, width: bubbleRadius * 2, height: bubbleRadius * 2))
-
-            // Main cyan ring
-            context.setStrokeColor(red: 0.0, green: 0.85, blue: 1.0, alpha: 1.0)
-            context.setLineWidth(4.0)
-            context.strokeEllipse(in: CGRect(x: centerX - bubbleRadius, y: centerY - bubbleRadius, width: bubbleRadius * 2, height: bubbleRadius * 2))
-
-            // Dark inner circle base
-            context.setFillColor(red: 0.10, green: 0.12, blue: 0.16, alpha: 1.0)
-            context.fillEllipse(in: CGRect(x: centerX - bubbleRadius + 2.0, y: centerY - bubbleRadius + 2.0, width: (bubbleRadius - 2.0) * 2, height: (bubbleRadius - 2.0) * 2))
-
-            // Draw game logo in the center of the bubble!
-            let logoImage = getLogoCGImage(fallback: cgImage)
-            let logoRadius: CGFloat = 52.0
-            context.saveGState()
-            context.addEllipse(in: CGRect(x: centerX - logoRadius, y: centerY - logoRadius, width: logoRadius * 2, height: logoRadius * 2))
-            context.clip()
-
-            context.interpolationQuality = .high
-            context.draw(logoImage, in: CGRect(x: centerX - logoRadius, y: centerY - logoRadius, width: logoRadius * 2, height: logoRadius * 2))
-            context.restoreGState()
-
-            // Red badge with tab indicator in the corner
-            let badgeX: CGFloat = 114.0
-            let badgeY: CGFloat = 114.0
-            let badgeRadius: CGFloat = 16.0
-            context.setFillColor(red: 0.90, green: 0.22, blue: 0.21, alpha: 1.0)
-            context.fillEllipse(in: CGRect(x: badgeX - badgeRadius, y: badgeY - badgeRadius, width: badgeRadius * 2, height: badgeRadius * 2))
-            context.setStrokeColor(red: 1.0, green: 1.0, blue: 1.0, alpha: 1.0)
-            context.setLineWidth(2.0)
-            context.strokeEllipse(in: CGRect(x: badgeX - badgeRadius, y: badgeY - badgeRadius, width: badgeRadius * 2, height: badgeRadius * 2))
-        } else {
-            // Clear container background with clean black
-            context.setFillColor(red: 0, green: 0, blue: 0, alpha: 1)
-            context.fill(CGRect(x: 0, y: 0, width: targetW, height: targetH))
-
-            // Draw game frame centered and pixel-perfect
-            context.interpolationQuality = .none
-            context.draw(cgImage, in: CGRect(x: drawX, y: drawY, width: origW, height: origH))
-        }
+        // Draw crisp pixel-perfect live game frame
+        context.interpolationQuality = .none
+        context.draw(cgImage, in: CGRect(x: drawX, y: drawY, width: origW, height: origH))
 
         var formatDesc: CMVideoFormatDescription?
         let vStatus = CMVideoFormatDescriptionCreateForImageBuffer(
@@ -313,7 +326,7 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
 
         let now = CMTime(seconds: CACurrentMediaTime(), preferredTimescale: 600)
         var timing = CMSampleTimingInfo(
-            duration: CMTime(value: 1, timescale: 30),
+            duration: CMTime(value: 1, timescale: 15),
             presentationTimeStamp: now,
             decodeTimeStamp: .invalid
         )
@@ -326,43 +339,47 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
             sampleTiming: &timing,
             sampleBufferOut: &sampleBuffer
         )
-        guard sStatus == noErr else { return nil }
-        return sampleBuffer
+        guard sStatus == noErr, let sb = sampleBuffer else { return nil }
+
+        // Display immediately so AVSampleBufferDisplayLayer never stalls waiting on controlTimebase
+        if let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: true) {
+            let dict = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+            CFDictionarySetValue(
+                dict,
+                Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
+                Unmanaged.passUnretained(kCFBooleanTrue).toOpaque()
+            )
+        }
+        return sb
     }
 
     // MARK: - AVPictureInPictureSampleBufferPlaybackDelegate
-    var isBubbleMode: Bool = false {
-        didSet {
-            displayLayer.flush()
-        }
-    }
 
     func pictureInPictureController(
         _ pictureInPictureController: AVPictureInPictureController,
         setPlaying playing: Bool
     ) {
-        isBubbleMode.toggle()
-        print("[PiP] Toggled bubble mode via center button: \(isBubbleMode)")
+        // Always stay live small game window — bubble mode removed
+        pictureInPictureController.invalidatePlaybackState()
     }
 
     func pictureInPictureControllerTimeRangeForPlayback(
         _ pictureInPictureController: AVPictureInPictureController
     ) -> CMTimeRange {
-        // Infinite duration prevents loading indicator on game stream
         return CMTimeRange(start: .zero, duration: .positiveInfinity)
     }
 
     func pictureInPictureControllerIsPlaybackPaused(
         _ pictureInPictureController: AVPictureInPictureController
     ) -> Bool {
-        return isBubbleMode
+        return false
     }
 
     func pictureInPictureController(
         _ pictureInPictureController: AVPictureInPictureController,
         didTransitionToRenderSize newRenderSize: CMVideoDimensions
     ) {
-        // Called when user pinches/resizes PiP window on home screen
+        // User pinched/resized PiP window freely on Home Screen
     }
 
     func pictureInPictureController(
@@ -370,26 +387,35 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         skipByInterval skipInterval: CMTime,
         completion completionHandler: @escaping () -> Void
     ) {
-        isBubbleMode.toggle()
         completionHandler()
     }
 
     // MARK: - AVPictureInPictureControllerDelegate
+
     func pictureInPictureControllerWillStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
-        onPiPStateChanged?(true)
+        isPiPStarting = true
+        j2me_render_set_background(0)
+        j2me_input_post_repaint()
     }
 
     func pictureInPictureControllerDidStartPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        isPiPStarting = false
+        j2me_render_set_background(0)
+        j2me_input_post_repaint()
         onPiPStateChanged?(true)
     }
 
     func pictureInPictureControllerDidStopPictureInPicture(_ pictureInPictureController: AVPictureInPictureController) {
+        isPiPStarting = false
         purgeBuffers()
         onPiPStateChanged?(false)
     }
 
     func pictureInPictureController(_ pictureInPictureController: AVPictureInPictureController, failedToStartPictureInPictureWithError error: Error) {
+        isPiPStarting = false
         print("[PiP] Failed: \(error.localizedDescription)")
+        purgeBuffers()
+        onPiPFailed?(error)
         onPiPStateChanged?(false)
     }
 

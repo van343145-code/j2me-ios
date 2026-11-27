@@ -707,3 +707,25 @@ double jvm_bridge_get_cpu_usage_percent(void) {
     return 0.0;
 #endif
 }
+
+static char g_wait_spin_diag[128] = "";
+static pthread_mutex_t g_wait_diag_lock = PTHREAD_MUTEX_INITIALIZER;
+
+void jvm_bridge_record_wait_diag(const char *caller_cls, const char *caller_method, long long waitms, int wret, int save_count, int reason_code) {
+    pthread_mutex_lock(&g_wait_diag_lock);
+    if (g_wait_spin_diag[0] == '\0' || reason_code == 1 || reason_code == 3) {
+        snprintf(g_wait_spin_diag, sizeof(g_wait_spin_diag), "r%d|%s.%s|w=%lld|rc=%d|c=%d",
+                 reason_code,
+                 caller_cls ? caller_cls : "?",
+                 caller_method ? caller_method : "?",
+                 waitms, wret, save_count);
+    }
+    pthread_mutex_unlock(&g_wait_diag_lock);
+}
+
+void jvm_bridge_copy_wait_diag(char *out_buf, int out_len) {
+    if (!out_buf || out_len <= 0) return;
+    pthread_mutex_lock(&g_wait_diag_lock);
+    snprintf(out_buf, (size_t)out_len, "%s", g_wait_spin_diag);
+    pthread_mutex_unlock(&g_wait_diag_lock);
+}

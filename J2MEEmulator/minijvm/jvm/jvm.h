@@ -1371,6 +1371,8 @@ struct _JavaThreadInfo {
     u8 volatile is_stop; //thread is marked as stop status, need set is_interrupt=1 also
     u8 volatile is_interrupt; //thread is marked as interrupt, set by Thread.interrupt();
     u8 type;// gc /jdwp /normal
+    s64 wait_spin_window_ms;
+    s32 wait_spin_count;
 
     thrd_t pthread;
     //调试器相关字段

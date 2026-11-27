@@ -126,6 +126,10 @@ long long jvm_bridge_get_used_ram_kb(void);
 /// Query current CPU usage percentage of this process (0.0 - 100.0 * cores).
 double jvm_bridge_get_cpu_usage_percent(void);
 
+/// Record/query first abnormal jthread_waitTime spin/error event for Flight Recorder diagnostics.
+void jvm_bridge_record_wait_diag(const char *caller_cls, const char *caller_method, long long waitms, int wret, int save_count, int reason_code);
+void jvm_bridge_copy_wait_diag(char *out_buf, int out_len);
+
 #ifdef __cplusplus
 }
 #endif

@@ -101,20 +101,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.9-jarNO1
-          name: "jarNO1 iOS v1.0.9 (Fix CPU/GC Watchdog SIGKILL khi tắt màn hình + tối ưu chạy ngầm 24/24)"
+          tag_name: v1.0.10-jarNO1
+          name: "jarNO1 iOS v1.0.10 (Sửa lỗi gốc CPU_FATAL 48s trong jthread_waitTime + khóa đệ quy Darwin)"
           body: |
-            ## jarNO1 iOS v1.0.9 — Sửa Lỗi iOS Tự Tắt App Khi Khóa Màn Hình / Treo Ngầm
-            - **Xác định chính xác nguyên nhân từ ảnh chụp 15:29 → 15:32 ở v1.0.8**:
-              - Khi khóa màn hình dù `Treo 24/24: ĐANG BẬT ✓`, toàn bộ tiến trình `jarNO1` bị iOS dừng ngầm (khởi động lại về màn hình chọn game `0 / 1 Game`) do **CPU & Wakeup Watchdog nền** (chứ không phải lỗi mất kết nối trong game):
-              1. **Sửa lỗi chí mạng trong miniJVM GC (`garbage.c` + `jvm_bridge.c`)**:
-                 - Trước đây khi heap Java + ảnh native RGBA (`VTninjaPro`) vượt `31.2 MB` (`48 MB × 65%`), vòng lặp `_gc_thread_run` bỏ qua nhánh `threadSleep` và **chạy `_garbage_collect()` liên tục 0ms nghỉ ở mức 100% CPU**, khiến iOS kích hoạt `CPU_FATAL` (`>80%` CPU nền) và tắt app ngay sau 1–3 phút khóa màn hình.
-                 - Đã sửa **luôn ngủ sau mỗi chu kỳ GC** (`1000ms` nền trước / `3000ms` nền sau) và nâng trần heap `48 MB → 96 MB` (`75%`) để không bao giờ kẹt vòng lặp GC 100% CPU.
-              2. **Ngừng `Canvas.paint(graphics)` hoàn toàn khi ẩn / khóa màn hình (`Canvas.java` + `j2me_render.m`)**:
-                 - Khi `NativeBridge.isBackground()` bật (chưa bật PiP) hoặc ở tab ẩn, `Canvas` bỏ qua hoàn toàn bytecode `paint()` và `EventQueue` repaint (khi mở lại app hoặc mở PiP, `Display.runEventLoop()` tự vẽ lại toàn màn hình tức thì), cắt mạnh ~70% CPU & RAM nền trong khi logic auto đánh quái & socket mạng chạy mượt 100%.
-              3. **Chặn bão đánh thức CPU nền (`jvm_util.c` + `jni_io.c`)**:
-                 - Tự kẹp các vòng `Thread.sleep(1..24ms)` thành `25ms` (40 Hz mượt) **chỉ khi ở nền**, ngăn game auto-hit/vòng lặp tick overrun vượt ngưỡng `150 wakeups/giây` của iOS khi tắt màn hình.
-              4. **Hộp đen ghi trạng thái nền (`DecadeBackgroundKeeper`)**:
-                 - Lưu nhịp chạy nền 5 giây/lần vào bộ nhớ bền vững (`UserDefaults`) và tự dọn bộ nhớ khi vừa tắt màn hình, giữ nguyên **100% lõi `AVAudioPlayer` + `background-loop.wav` gốc của J2ME NST 1.0.0**, không có chế độ Bong Bóng, giữ PiP cửa sổ nhỏ kéo to nhỏ ngoài màn hình.
+            ## jarNO1 iOS v1.0.10 — Sửa Nguyên Nhân Gốc Gây Tắt App Ở 48s Khi Khóa Màn Hình
+            - **Phát hiện chính xác từ crash log USB trên iPhone 16 Pro Max (`cpu_resource_fatal`)**:
+              - Cả 5 crash log (`11:39` → `15:08`) và Flight Recorder (`47s`, `RAM 98MB`, `AVAudioPlayer playing`) đều chứng minh app **không bị tắt vì âm thanh hay thiếu RAM**, mà bị watchdog nền của iOS kết thúc ở giây 47–51 (`48s CPU / 49s`, `98%` trên 1 nhân) vì một luồng Java quay 0ms trong **`jthread_waitTime` → `cnd_timedwait` (`__psynch_cvwait`) + `timespec_get`**.
+            - **Sửa triệt để tại `jthread_waitTime` (`jvm_util.c`) & `jni_reflect.c`**:
+              1. **Bỏ qua `cnd_timedwait` khi không giữ monitor** (`saveThread != current_thread || saveCount <= 0` — trước đây `pthread_cond_timedwait` trên Darwin trả `EPERM` ngay trong <1µs khiến vòng lặp quay 2 triệu lần/giây ở 100% CPU) → chuyển sang ngủ an toàn bằng `threadSleep`.
+              2. **Tháo khóa đệ quy chuẩn xác với `PTHREAD_MUTEX_RECURSIVE` của iOS** (`saveCount > 1`): mở `(saveCount - 1)` lần trước khi gọi `pthread_cond_(timed)wait` và khóa lại đúng số lần sau khi tỉnh để nhân Darwin luôn thấy lock count = 1.
+              3. **Chặn timeout âm/tràn số & dùng `timespec_get` trực tiếp**: tránh mốc thời gian quá khứ gây `ETIMEDOUT` tức thì, kẹp micro-wait nền tối thiểu `25ms`, và kiểm tra kết quả trả về `thrd_error` + chống bão đánh thức trong nền (kèm ghi nhận `wait_spin_diag` nếu phát sinh).
+              4. **Sửa `Unsafe.park` (`jni_reflect.c`) & Flight Recorder (`DecadeBackgroundKeeper.swift`)**: không truyền `waitms == 0` nhầm thành ngủ vô hạn khi hết hạn tuyệt đối, và chỉ ghi nhận phiên nền khi đang mở game.
           files: |
             jarNO1.ipa

@@ -1742,6 +1742,9 @@ s32 com_misc_Unsafe_pack(Runtime *runtime, JClass *clazz) {
 
     if (time < NANO_2_MILLS_SCALE)time = NANO_2_MILLS_SCALE;
     s64 waitmills = absolute ? (time - currentTimeMillis()) : time / NANO_2_MILLS_SCALE;
+    if (absolute && waitmills <= 0) {
+        return 0;
+    }
 
     s32 ret = 0;
     Runtime *rt = runtime;// current thread

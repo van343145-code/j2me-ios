@@ -1034,6 +1034,16 @@ s32 jthread_resume(Runtime *runtime) {
     return 0;
 }
 
+extern int j2me_render_is_background(void);
+extern void jvm_bridge_record_wait_diag(const char *caller_cls, const char *caller_method, long long waitms, int wret, int save_count, int reason_code);
+
+static void _record_wait_diag_helper(Runtime *runtime, s64 waitms, int wret, s32 saveCount, int reason_code) {
+    Runtime *caller = (runtime && runtime->parent) ? runtime->parent : runtime;
+    const c8 *c_cls = (caller && caller->clazz && caller->clazz->name) ? utf8_cstr(caller->clazz->name) : "?";
+    const c8 *c_mtd = (caller && caller->method && caller->method->name) ? utf8_cstr(caller->method->name) : "?";
+    jvm_bridge_record_wait_diag(c_cls, c_mtd, (long long)waitms, wret, (int)saveCount, reason_code);
+}
+
 s32 jthread_waitTime(MemoryBlock *mb, Runtime *runtime, s64 waitms) {
     if (mb == NULL)return -1;
     if (!mb->thread_lock) {
@@ -1044,26 +1054,107 @@ s32 jthread_waitTime(MemoryBlock *mb, Runtime *runtime, s64 waitms) {
     u8 thread_status = runtime->thrd_info->thread_status;
     runtime->thrd_info->thread_status = THREAD_STATUS_WAIT;
 
-    // wait会释放锁，因此保存锁的拥有者和计数
+    void *current_thread = (void *) (intptr_t) (runtime->thrd_info);
     void *saveThread = mb->thread_lock->owner_thread;
     s32 saveCount = mb->thread_lock->count;
+
+    // Guard against Object.wait called without owning the monitor (Darwin pthread_cond_timedwait
+    // returns EPERM in <1us and would otherwise cause a 100%-CPU tight spin).
+    if (saveThread != current_thread || saveCount <= 0) {
+        _record_wait_diag_helper(runtime, waitms, -1, saveCount, 1);
+        s64 sleep_ms = waitms > 0 ? (waitms < 250 ? waitms : 250) : (j2me_render_is_background() ? 25 : 10);
+        if (sleep_ms < 25 && j2me_render_is_background()) sleep_ms = 25;
+        threadSleep(sleep_ms);
+        runtime->thrd_info->thread_status = thread_status;
+        runtime->thrd_info->curThreadLock = NULL;
+        jthread_block_exit(runtime);
+        return check_throw_interruptexception(runtime);
+    }
+
+    // Unwind any extra recursive lock acquisitions so Darwin pthread_cond_(timed)wait always sees count == 1.
+    if (saveCount > 1) {
+        for (s32 u = 1; u < saveCount; u++) {
+            mtx_unlock(&mb->thread_lock->mutex_lock);
+        }
+    }
+
+    // wait会释放锁，因此保存锁的拥有者和计数
     mb->thread_lock->owner_thread = NULL;
     mb->thread_lock->count = 0;
     if (waitms) {
-        waitms += currentTimeMillis();
-        struct timespec t;
-        //clock_gettime(CLOCK_REALTIME, &t);
-        t.tv_sec = waitms / 1000;
-        t.tv_nsec = (waitms % 1000) * 1000000;
-        cnd_timedwait(&mb->thread_lock->thread_cond, &mb->thread_lock->mutex_lock, &t);
+        s64 eff_ms = waitms;
+        if (eff_ms < 0) {
+            _record_wait_diag_helper(runtime, waitms, 0, saveCount, 2);
+            eff_ms = j2me_render_is_background() ? 25 : 1;
+        }
+        if (eff_ms < 25 && j2me_render_is_background()) {
+            eff_ms = 25;
+        }
+        if (eff_ms > 2147483000LL) {
+            eff_ms = 2147483000LL;
+        }
+
+        struct timespec t_now;
+        timespec_get(&t_now, TIME_UTC);
+        struct timespec t = t_now;
+        t.tv_sec += eff_ms / 1000;
+        t.tv_nsec += (eff_ms % 1000) * 1000000L;
+        if (t.tv_nsec >= 1000000000L) {
+            t.tv_sec += t.tv_nsec / 1000000000L;
+            t.tv_nsec %= 1000000000L;
+        }
+
+        int wret = cnd_timedwait(&mb->thread_lock->thread_cond, &mb->thread_lock->mutex_lock, &t);
+        if (wret == thrd_error) {
+            _record_wait_diag_helper(runtime, waitms, wret, saveCount, 3);
+            mtx_unlock(&mb->thread_lock->mutex_lock);
+            threadSleep(j2me_render_is_background() ? 25 : (eff_ms < 25 ? eff_ms : 25));
+            mtx_lock(&mb->thread_lock->mutex_lock);
+        } else if (wret != thrd_timedout) {
+            struct timespec t_end;
+            timespec_get(&t_end, TIME_UTC);
+            s64 elapsed_ms = (s64)(t_end.tv_sec - t_now.tv_sec) * 1000LL + (s64)(t_end.tv_nsec - t_now.tv_nsec) / 1000000LL;
+            if (elapsed_ms < 2) {
+                s64 now_ms = (s64)t_end.tv_sec * 1000LL + (s64)t_end.tv_nsec / 1000000LL;
+                if (now_ms - runtime->thrd_info->wait_spin_window_ms > 100) {
+                    runtime->thrd_info->wait_spin_window_ms = now_ms;
+                    runtime->thrd_info->wait_spin_count = 1;
+                } else {
+                    runtime->thrd_info->wait_spin_count++;
+                    int in_bg = j2me_render_is_background();
+                    if ((in_bg && runtime->thrd_info->wait_spin_count >= 40) || runtime->thrd_info->wait_spin_count >= 500) {
+                        _record_wait_diag_helper(runtime, waitms, wret, saveCount, 4);
+                        runtime->thrd_info->wait_spin_count = 0;
+                        mtx_unlock(&mb->thread_lock->mutex_lock);
+                        threadSleep(in_bg ? 25 : 2);
+                        mtx_lock(&mb->thread_lock->mutex_lock);
+                    }
+                }
+            } else {
+                runtime->thrd_info->wait_spin_count = 0;
+            }
+        } else {
+            runtime->thrd_info->wait_spin_count = 0;
+        }
     } else {
-        cnd_wait(&mb->thread_lock->thread_cond, &mb->thread_lock->mutex_lock);
+        int wret = cnd_wait(&mb->thread_lock->thread_cond, &mb->thread_lock->mutex_lock);
+        if (wret == thrd_error) {
+            _record_wait_diag_helper(runtime, waitms, wret, saveCount, 5);
+            mtx_unlock(&mb->thread_lock->mutex_lock);
+            threadSleep(j2me_render_is_background() ? 25 : 10);
+            mtx_lock(&mb->thread_lock->mutex_lock);
+        }
     }
     //jvm_printf("!!!!!wake: %llx   \n", (s64) (intptr_t) (&mb->thread_lock->thread_cond));
     runtime->thrd_info->thread_status = thread_status;
     runtime->thrd_info->curThreadLock = NULL;
 
     //wait结束时，获得锁后恢复锁的拥有者和计数
+    if (saveCount > 1) {
+        for (s32 u = 1; u < saveCount; u++) {
+            mtx_lock(&mb->thread_lock->mutex_lock);
+        }
+    }
     mb->thread_lock->owner_thread = saveThread;
     mb->thread_lock->count = saveCount;
     jthread_block_exit(runtime);
@@ -1078,8 +1169,6 @@ s32 jthread_wakeup(Runtime *runtime) {
     jthread_unlock(tl, runtime);
     return 0;
 }
-
-extern int j2me_render_is_background(void);
 
 s32 jthread_sleep(Runtime *runtime, s64 ms) {
     static const s64 PERIOD = 500;

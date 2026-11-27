@@ -175,7 +175,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             let cpu = d.integer(forKey: Self.recCpuKey)
             let audio = d.string(forKey: Self.recAudioKey) ?? "unknown"
             let summary = "⚠️ Phiên trước bị iOS dừng lúc \(alive)s (RAM \(ram)MB, CPU \(cpu)%, \(audio))"
-            lastKilledPostMortem = "Bị dừng lúc \(alive)s (\(ram)MB/\(cpu)%)"
+            lastKilledPostMortem = "Dừng lúc \(alive)s (\(ram)MB • \(cpu)%)"
             lastBgReport = summary
             d.set(false, forKey: Self.recActiveKey)
             d.set(summary, forKey: Self.recLastReportKey)
@@ -456,17 +456,24 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     // MARK: - Passive Background Execution Proof Telemetry & Flight Recorder
 
     private func startBackgroundRecordingIfNeeded() {
-        guard bgEnterDate == nil else { return }
+        guard hasActiveGame, bgEnterDate == nil else { return }
         bgEnterDate = Date()
         bgLastHeartbeatElapsed = 0
         recordBackgroundSnapshot(aliveSec: 0, active: true)
+    }
+
+    var lastWaitDiag: String {
+        var buf = [CChar](repeating: 0, count: 128)
+        jvm_bridge_copy_wait_diag(&buf, Int32(buf.count))
+        return String(cString: buf)
     }
 
     private func recordBackgroundSnapshot(aliveSec: Int, active: Bool) {
         let d = UserDefaults.standard
         let ramMB = Int((Double(jvm_bridge_get_used_ram_kb()) / 1024.0).rounded())
         let cpuPct = Int(min(999.0, max(0.0, jvm_bridge_get_cpu_usage_percent())).rounded())
-        let audioInfo = "\(isAudioPlaying ? "playing" : audioStatus)"
+        let waitDiag = lastWaitDiag
+        let audioInfo = "\(isAudioPlaying ? "playing" : audioStatus)" + (waitDiag.isEmpty ? "" : " • \(waitDiag)")
         d.set(active, forKey: Self.recActiveKey)
         if let entered = bgEnterDate {
             d.set(entered.timeIntervalSince1970, forKey: Self.recStartKey)

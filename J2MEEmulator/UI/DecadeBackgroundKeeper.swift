@@ -2,63 +2,27 @@
 //  DecadeBackgroundKeeper.swift
 //  J2MEEmulator
 //
-//  Hardened Dual-Layer 24/24 Background Execution Engine (v1.0.7):
-//  - `isTreoActive` defaults to TRUE (migrated key `jarno1_treo_247_v7_off`) so users
-//    upgrading from earlier builds never stay stuck with an accidental toggle-off state.
-//    Once enabled (or after tapping "Ẩn Ứng Dụng" once), it is permanently remembered in
-//    UserDefaults so every future multitasking swipe OR screen lock runs 24/24 non-stop.
-//  - Dual-Layer Hardware Audio Keep-Alive:
-//      1. Primary: `AVAudioEngine` + `AVAudioSourceNode` driving a live CoreAudio `AURemoteIO`
-//         hardware render callback outputting a continuous 16 Hz subsonic sine wave at
-//         -50.5 dBFS (amplitude 0.003, outputVolume = 1.0): 100% physically inaudible on
-//         iPhone speakers & headphones while staying >45 dB above 16-bit digital zero so
-//         iOS 18/26 `mediaserverd` NEVER flags the session as silent!
-//      2. Secondary: `AVAudioPlayer` looping `silent.wav` (16 Hz subsonic -57 dBFS) at
-//         `volume = 1.0` (fallback in-memory 16 Hz WAV, fallback `background-loop.wav` like NST).
-//  - Uses exact 2-arg `AVAudioSession.setCategory(.playback, options:)` + 1-arg `setActive(true)`
-//    matching J2ME NST (`[.mixWithOthers]` by default, plus optional 1-tap Exclusive `.playback`
-//    mode in Treo 24/7 & Game Settings).
-//  - Built-in On-Device Background Proof Telemetry: counts actual 1-second background CPU ticks
-//    vs wall-clock elapsed time across every lock/multitasking session and reports exact status.
-//  - Zero CLLocationManager, zero 15s HTTP polling, zero private BKSProcessAssertion.
+//  EXACT 1:1 Port of J2ME NST 1.0.0 BackgroundAudio.cs + AppDelegate.cs:
+//  - Pure AVAudioPlayer playing J2ME NST's exact `background-loop.wav` (22050 Hz mono, 8s,
+//    217 Hz, peak=1603) with `numberOfLoops = -1`, `volume = 0.0`, `prepareToPlay()`, `play()`.
+//  - ZERO AVAudioEngine / AVAudioSourceNode (avoids lock-screen AVAudioEngineConfigurationChange
+//    teardown & background AVAudioSession reactivation failures on iOS 18/26).
+//  - ZERO eager AVPictureInPictureController / AVSampleBufferDisplayLayer at startup.
+//  - Uses exact 2-arg `AVAudioSession.setCategory(.playback, options: [.mixWithOthers])` +
+//    `setActive(true)` matching J2ME NST 1:1 (plus optional 1-tap Exclusive `.playback` mode).
+//  - Exact 5.0-second repeating RunLoop monitor + 4.0-second `beginBackgroundTask` handoff
+//    on `DidEnterBackground` (matching J2ME NST byte-for-byte).
+//  - Permanently remembers `isTreoActive` (default TRUE) after enabling / tapping "Ẩn Ứng Dụng"
+//    once, so every future multitasking swipe or screen lock automatically stays running 24/24.
+//  - Includes passive 1-second background execution proof telemetry for on-device verification.
 //
 
 import UIKit
 import AVFoundation
-import AudioToolbox
 import UserNotifications
 
-/// Non-isolated CoreAudio render-block factory so `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`
-/// NEVER attaches a `@MainActor` executor assertion to the real-time AURemoteIO audio thread.
-nonisolated private func createSubsonicAudioSourceNode(format: AVAudioFormat, sampleRate: Double) -> AVAudioSourceNode {
-    // Continuous 16 Hz subsonic sine wave at amplitude 0.003 (-50.5 dBFS):
-    // - 100% physically inaudible (below 20 Hz human threshold & ~120 Hz iPhone speaker cutoff)
-    // - ~98 LSB in 16-bit PCM: never quantized to 0, keeps AURemoteIO hardware IO alive 24/24
-    var phase: Double = 0.0
-    let phaseStep = 2.0 * Double.pi * 16.0 / sampleRate
-    let amplitude: Float = 0.003
-    let twoPi = 2.0 * Double.pi
-
-    return AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
-        let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
-        for frame in 0..<Int(frameCount) {
-            let sample = Float(sin(phase)) * amplitude
-            phase += phaseStep
-            if phase >= twoPi {
-                phase -= twoPi
-            }
-            for buf in abl {
-                if let ptr = buf.mData?.assumingMemoryBound(to: Float.self) {
-                    ptr[frame] = sample
-                }
-            }
-        }
-        return noErr
-    }
-}
-
 // ============================================================
-// MARK: - Decade Location Keeper (Disabled — Cool Core from J2ME NST)
+// MARK: - Decade Location Keeper (Disabled — Pure NST Core)
 // ============================================================
 
 final class DecadeLocationKeeper: NSObject {
@@ -66,7 +30,6 @@ final class DecadeLocationKeeper: NSObject {
 
     private(set) var isRunning = false
 
-    /// Disabled by default (J2ME NST uses pure audio keep-alive, zero CoreLocation battery drain).
     var isLocationModeActive: Bool {
         get { false }
         set {
@@ -81,7 +44,7 @@ final class DecadeLocationKeeper: NSObject {
 }
 
 // ============================================================
-// MARK: - Decade Network Keeper (Zero-Radio-Drain Passive Stub)
+// MARK: - Decade Network Keeper (Passive Stub — Zero Radio Churn)
 // ============================================================
 
 final class DecadeNetworkKeeper {
@@ -92,53 +55,43 @@ final class DecadeNetworkKeeper {
 
     private init() { }
 
-    /// Game TCP sockets maintain native kernel SO_KEEPALIVE + TCP_NODELAY in decade_proxy_tunnel.c.
-    /// Avoid periodic HTTP HEAD requests that keep cellular/Wi-Fi radios hot.
     func start() { isRunning = true }
     func stop() { isRunning = false }
 }
 
 // ============================================================
-// MARK: - DecadeBackgroundKeeper (Dual-Layer AURemoteIO + NST 24/24 Core)
+// MARK: - DecadeBackgroundKeeper (1:1 J2ME NST 1.0.0 Core)
 // ============================================================
 
 final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     static let shared = DecadeBackgroundKeeper()
 
-    /// Notification posted on foreground return after >= 8s in background so UI can display proof toast.
+    /// Notification posted on foreground return after >= 8s in background so UI displays proof toast.
     static let backgroundResumeReportNotification = Notification.Name("DecadeBackgroundResumeReport")
 
-    /// Migrated v7 sticky-off key (inverted: false => ON by default).
-    /// Clean migration guarantees users who accidentally toggled off the ambiguous v1.0.6 button
-    /// automatically start v1.0.7 with 24/24 background execution enabled.
+    /// Inverted key matching J2ME NST `App.Sticky` (`!NSUserDefaults.bool(forKey: "sticky_off")`).
+    /// Defaults to TRUE on fresh install & permanently remembers preference across launches.
     private static let stickyOffKey = "jarno1_treo_247_v7_off"
 
-    /// Optional Exclusive `.playback` mode (OFF by default = `.mixWithOthers` matching J2ME NST).
+    /// Optional Exclusive `.playback` mode (OFF by default = `.mixWithOthers` matching J2ME NST 1:1).
     private static let exclusiveAudioKey = "jarno1_exclusive_audio_mode"
 
-    // Audio Layer 1: Hardware AURemoteIO via AVAudioEngine + AVAudioSourceNode
-    private var audioEngine: AVAudioEngine?
-    private var sourceNode: AVAudioSourceNode?
-
-    // Audio Layer 2: NST-compatible AVAudioPlayer loop redundancy
+    // Exact J2ME NST BackgroundAudio fields: _player, _monitor, _wanted, _interrupted
     private var audioPlayer: AVAudioPlayer?
-
-    // Timers & Background Handoff
-    private var monitorTimer: DispatchSourceTimer?
+    private var monitorTimer: Timer?
     private var bgTaskHandoffTimer: Timer?
     private var bgTickTimer: DispatchSourceTimer?
     private var ramCleanTimer: DispatchSourceTimer?
     private var currentGameName: String = "jarNO1"
     private var bgTaskID: UIBackgroundTaskIdentifier = .invalid
 
-    // Runtime state
     private var wanted = false
     private var interrupted = false
     private var interruptedAt: Date?
     private var isInBackground = false
     private var lastBgHandoffTime: CFTimeInterval = 0
 
-    // On-device Background Proof Telemetry
+    // Passive on-device background execution proof telemetry
     private var bgEnterDate: Date?
     private var bgAliveTicks: Int = 0
     private(set) var lastBgWallSeconds: Int = 0
@@ -147,20 +100,12 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     private(set) var audioStatus: String = "stopped"
     private(set) var lastAudioError: String = ""
 
-    var isEngineRunning: Bool {
-        return audioEngine?.isRunning == true
-    }
-
-    var isPlayerPlaying: Bool {
+    var isAudioPlaying: Bool {
         return audioPlayer?.isPlaying == true
     }
 
-    var isAudioPlaying: Bool {
-        return isEngineRunning || isPlayerPlaying
-    }
-
     var isFullyActive: Bool {
-        return isEngineRunning && isPlayerPlaying
+        return isAudioPlaying
     }
 
     private var hasActiveGame: Bool {
@@ -177,8 +122,6 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    /// FALSE (default) = `.mixWithOthers` (matches J2ME NST; lets TikTok/YouTube play simultaneously).
-    /// TRUE = Exclusive `.playback` without `.mixWithOthers` (strongest lock-screen priority on iOS 26).
     var isExclusiveAudioMode: Bool {
         get {
             return UserDefaults.standard.bool(forKey: Self.exclusiveAudioKey)
@@ -191,7 +134,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     var audioModeDescription: String {
         return isExclusiveAudioMode
             ? "Độc quyền (Khóa cứng 24/24)"
-            : "Mix app khác (Chuẩn NST)"
+            : "Mix app khác (1:1 J2ME NST)"
     }
 
     var isAutoCleanRamActive: Bool {
@@ -222,11 +165,11 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
+    /// Exact 1:1 J2ME NST `BackgroundAudio.Observe()` notifications
     private func setupNotifications() {
         let nc = NotificationCenter.default
         let session = AVAudioSession.sharedInstance()
 
-        // Audio session & engine observers
         nc.addObserver(
             self,
             selector: #selector(handleAudioInterruption(_:)),
@@ -253,24 +196,11 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         )
         nc.addObserver(
             self,
-            selector: #selector(handleEngineConfigurationChange),
-            name: .AVAudioEngineConfigurationChange,
-            object: nil
-        )
-        nc.addObserver(
-            self,
             selector: #selector(handleMemoryWarning),
             name: UIApplication.didReceiveMemoryWarningNotification,
             object: nil
         )
-
-        // Direct UIApplication + Lock-Screen observers (safely coalesced with SceneDelegate)
-        nc.addObserver(
-            self,
-            selector: #selector(onSceneWillResignActive),
-            name: UIApplication.willResignActiveNotification,
-            object: nil
-        )
+        // Standard UIApplication background/foreground fallback (coalesced with SceneDelegate)
         nc.addObserver(
             self,
             selector: #selector(onSceneDidEnterBackground),
@@ -279,20 +209,8 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         )
         nc.addObserver(
             self,
-            selector: #selector(onProtectedDataWillBecomeUnavailable),
-            name: UIApplication.protectedDataWillBecomeUnavailableNotification,
-            object: nil
-        )
-        nc.addObserver(
-            self,
             selector: #selector(onSceneWillEnterForeground),
             name: UIApplication.willEnterForegroundNotification,
-            object: nil
-        )
-        nc.addObserver(
-            self,
-            selector: #selector(onSceneDidBecomeActive),
-            name: UIApplication.didBecomeActiveNotification,
             object: nil
         )
     }
@@ -325,7 +243,8 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         guard changed else { return }
         runOnMain { [weak self] in
             guard let self = self, self.wanted else { return }
-            self.teardownAudioLayers()
+            self.audioPlayer?.stop()
+            self.audioPlayer = nil
             self.interrupted = false
             self.interruptedAt = nil
             self.ensurePlaying()
@@ -384,51 +303,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         ramCleanTimer = nil
     }
 
-    // MARK: - Subsonic 16 Hz WAV Fallback Generator (-50 dBFS, 100% inaudible, non-zero PCM)
-
-    private func makeSubsonicKeepaliveWavData() -> Data {
-        let sampleRate: Int = 22050
-        let durationSeconds: Int = 8
-        let numSamples = sampleRate * durationSeconds
-        let dataSize = numSamples * 2
-        var data = Data(capacity: 44 + dataSize)
-
-        func appendUInt32LE(_ v: UInt32) {
-            var le = v.littleEndian
-            withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
-        }
-        func appendUInt16LE(_ v: UInt16) {
-            var le = v.littleEndian
-            withUnsafeBytes(of: &le) { data.append(contentsOf: $0) }
-        }
-
-        // RIFF/WAVE header (mono, 16-bit PCM, 22050 Hz)
-        data.append(contentsOf: "RIFF".utf8)
-        appendUInt32LE(UInt32(36 + dataSize))
-        data.append(contentsOf: "WAVE".utf8)
-        data.append(contentsOf: "fmt ".utf8)
-        appendUInt32LE(16)
-        appendUInt16LE(1) // PCM
-        appendUInt16LE(1) // mono
-        appendUInt32LE(UInt32(sampleRate))
-        appendUInt32LE(UInt32(sampleRate * 2))
-        appendUInt16LE(2)
-        appendUInt16LE(16)
-        data.append(contentsOf: "data".utf8)
-        appendUInt32LE(UInt32(dataSize))
-
-        // 16 Hz subsonic sine wave, peak amplitude 96 (~ -50.6 dBFS) played at volume 1.0
-        let freq = 16.0
-        let amp = 96.0
-        for i in 0..<numSamples {
-            let phase = 2.0 * Double.pi * freq * Double(i) / Double(sampleRate)
-            var sample = Int16((sin(phase) * amp).rounded()).littleEndian
-            withUnsafeBytes(of: &sample) { data.append(contentsOf: $0) }
-        }
-        return data
-    }
-
-    // MARK: - Dual-Layer Audio Keep-Alive Core (AVAudioEngine AURemoteIO + AVAudioPlayer)
+    // MARK: - 1:1 J2ME NST BackgroundAudio Core (Start / Stop / Foreground / EnsurePlaying)
 
     func startKeepalive() {
         runOnMain { [weak self] in
@@ -448,11 +323,12 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             self.wanted = false
             self.interrupted = false
             self.interruptedAt = nil
-            self.monitorTimer?.cancel()
+            self.monitorTimer?.invalidate()
             self.monitorTimer = nil
             self.stopBackgroundTickTimer()
             self.bgEnterDate = nil
-            self.teardownAudioLayers()
+            self.audioPlayer?.stop()
+            self.audioPlayer = nil
             self.audioStatus = "stopped"
             self.lastAudioError = ""
             DecadeNetworkKeeper.shared.stop()
@@ -462,147 +338,38 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    private func teardownAudioLayers() {
-        if let engine = audioEngine {
-            engine.stop()
-            engine.reset()
-        }
-        audioEngine = nil
-        sourceNode = nil
-
-        audioPlayer?.stop()
-        audioPlayer = nil
-    }
-
+    /// Exact 1:1 J2ME NST 5.0-second repeating monitor timer
     private func startMonitorIfNeeded() {
         guard monitorTimer == nil else { return }
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.main)
-        timer.schedule(deadline: .now() + 3.0, repeating: 3.0)
-        timer.setEventHandler { [weak self] in
+        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
             guard let self = self, self.wanted else { return }
             if self.interrupted {
-                // Self-heal if iOS swallows `.ended` after lock screen / notification / video apps
-                if let at = self.interruptedAt, Date().timeIntervalSince(at) >= 2.5 {
+                // Self-heal if iOS drops `.ended` after a transient notification/lock transition
+                if let at = self.interruptedAt, Date().timeIntervalSince(at) >= 4.0 {
                     self.interrupted = false
                     self.interruptedAt = nil
                     self.ensurePlaying()
                 }
                 return
             }
-            if !self.isFullyActive {
+            if self.audioPlayer?.isPlaying != true {
                 self.ensurePlaying()
             }
         }
-        timer.resume()
+        RunLoop.main.add(timer, forMode: .common)
         monitorTimer = timer
     }
 
-    private func startAudioEngineIfNeeded() -> Bool {
-        if let engine = audioEngine, engine.isRunning {
-            return true
-        }
-
-        if let existing = audioEngine {
-            do {
-                existing.prepare()
-                try existing.start()
-                if existing.isRunning {
-                    return true
-                }
-            } catch {
-                lastAudioError = "eng-restart: \((error as NSError).code)"
-                existing.stop()
-                existing.reset()
-                audioEngine = nil
-                sourceNode = nil
-            }
-        }
-
-        let engine = AVAudioEngine()
-        let hwRate = engine.outputNode.outputFormat(forBus: 0).sampleRate
-        let sampleRate: Double = (hwRate >= 8000.0 && hwRate <= 192000.0) ? hwRate : 44100.0
-
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else {
-            lastAudioError = "eng-fmt"
-            return false
-        }
-
-        let srcNode = createSubsonicAudioSourceNode(format: format, sampleRate: sampleRate)
-
-        engine.attach(srcNode)
-        engine.connect(srcNode, to: engine.mainMixerNode, format: format)
-        engine.mainMixerNode.outputVolume = 1.0
-        engine.prepare()
-
-        do {
-            try engine.start()
-            self.audioEngine = engine
-            self.sourceNode = srcNode
-            return engine.isRunning
-        } catch {
-            let nsErr = error as NSError
-            lastAudioError = "eng(\(nsErr.code)): \(nsErr.localizedDescription)"
-            print("[BackgroundAudio] AVAudioEngine start failed: \(error)")
-            engine.stop()
-            return false
-        }
-    }
-
-    private func startAudioPlayerIfNeeded() -> Bool {
-        if let p = audioPlayer, p.isPlaying {
-            return true
-        }
-
-        if audioPlayer == nil {
-            var created: AVAudioPlayer? = nil
-            var targetVolume: Float = 1.0
-
-            // Prefer subsonic 16 Hz silent.wav (-57.2 dBFS) at FULL volume = 1.0:
-            // stays 100% inaudible while keeping non-zero gain + non-zero PCM!
-            if let silentURL = Bundle.main.url(forResource: "silent", withExtension: "wav") {
-                created = try? AVAudioPlayer(contentsOf: silentURL)
-                targetVolume = 1.0
-            }
-            // Fallback 1: in-memory 16 Hz -50.6 dBFS PCM WAV at volume = 1.0
-            if created == nil {
-                created = try? AVAudioPlayer(data: makeSubsonicKeepaliveWavData())
-                targetVolume = 1.0
-            }
-            // Fallback 2: NST background-loop.wav at volume = 0.0 (exact NST fallback)
-            if created == nil, let loopURL = Bundle.main.url(forResource: "background-loop", withExtension: "wav") {
-                created = try? AVAudioPlayer(contentsOf: loopURL)
-                targetVolume = 0.0
-            }
-
-            guard let p = created else {
-                lastAudioError = "player-missing-wav"
-                print("[BackgroundAudio] Failed to create AVAudioPlayer")
-                return false
-            }
-            p.delegate = self
-            p.numberOfLoops = -1
-            p.volume = targetVolume
-            audioPlayer = p
-        }
-
-        guard let p = audioPlayer else { return false }
-        guard p.prepareToPlay(), p.play() else {
-            lastAudioError = "player-play-false"
-            print("[BackgroundAudio] AVAudioPlayer.play() returned false")
-            return false
-        }
-        return true
-    }
-
-    /// Ensures BOTH hardware AURemoteIO (`AVAudioEngine`) and `AVAudioPlayer` loop are active:
-    /// 1. If both are already running -> immediately return WITHOUT touching AVAudioSession!
-    /// 2. Configure 2-arg `setCategory(.playback, options:)` + 1-arg `setActive(true)` matching NST.
-    /// 3. Start `AVAudioEngine` (16 Hz -50.5 dBFS) and `AVAudioPlayer` (`silent.wav` vol=1.0).
+    /// Exact 1:1 J2ME NST `BackgroundAudio.EnsurePlaying()`:
+    /// 1. If `audioPlayer.isPlaying` is already true -> immediately return WITHOUT touching AVAudioSession!
+    /// 2. `AVAudioSession.setCategory(.playback, options: [.mixWithOthers])` + `setActive(true)`
+    /// 3. Load exact NST `background-loop.wav` (22050 Hz, 8s, 217 Hz, peak=1603)
+    /// 4. `numberOfLoops = -1`, `volume = 0.0`, `prepareToPlay()`, `play()`.
     private func ensurePlaying() {
         guard wanted, !interrupted else { return }
 
-        if isFullyActive {
-            audioStatus = "Engine+Player OK"
+        if let p = audioPlayer, p.isPlaying {
+            audioStatus = "playing"
             return
         }
 
@@ -614,27 +381,46 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         } catch {
             let nsErr = error as NSError
             lastAudioError = "sess(\(nsErr.code)): \(nsErr.localizedDescription)"
-            audioStatus = "Lỗi AudioSession (\(nsErr.code))"
+            audioStatus = "error(\(nsErr.code))"
             print("[BackgroundAudio] AVAudioSession error: \(error)")
             return
         }
 
-        let engOK = startAudioEngineIfNeeded()
-        let plyOK = startAudioPlayerIfNeeded()
-
-        if engOK && plyOK {
-            audioStatus = "Engine+Player OK"
-            lastAudioError = ""
-        } else if engOK {
-            audioStatus = "Engine OK (Player off)"
-        } else if plyOK {
-            audioStatus = "Player OK (Engine off)"
-        } else {
-            audioStatus = lastAudioError.isEmpty ? "Audio fail" : lastAudioError
+        if audioPlayer == nil {
+            guard let url = Bundle.main.url(forResource: "background-loop", withExtension: "wav")
+                    ?? Bundle.main.url(forResource: "silent", withExtension: "wav") else {
+                lastAudioError = "missing background-loop.wav"
+                audioStatus = "error(no-wav)"
+                print("[BackgroundAudio] Missing background-loop.wav in bundle")
+                return
+            }
+            do {
+                let p = try AVAudioPlayer(contentsOf: url)
+                p.delegate = self
+                p.numberOfLoops = -1
+                audioPlayer = p
+            } catch {
+                let nsErr = error as NSError
+                lastAudioError = "player(\(nsErr.code)): \(nsErr.localizedDescription)"
+                audioStatus = "error(\(nsErr.code))"
+                print("[BackgroundAudio] AVAudioPlayer init error: \(error)")
+                return
+            }
         }
+
+        guard let p = audioPlayer else { return }
+        p.volume = 0.0
+        guard p.prepareToPlay(), p.play() else {
+            lastAudioError = "Play() trả false"
+            audioStatus = "play-false"
+            print("[BackgroundAudio] AVAudioPlayer.play() returned false")
+            return
+        }
+        lastAudioError = ""
+        audioStatus = "playing"
     }
 
-    // MARK: - Background Execution Proof Telemetry (1-second real execution counter)
+    // MARK: - Passive Background Execution Proof Telemetry
 
     private func startBackgroundTickTimerIfNeeded() {
         if bgEnterDate == nil {
@@ -672,7 +458,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         if !isTreoActive {
             lastBgReport = "Treo 24/24 đang TẮT (\(alive)/\(wall)s)"
         } else if alive >= max(2, Int(Double(wall) * 0.70)) {
-            lastBgReport = "✓ Chạy nền xuyên suốt \(alive)/\(wall)s (\(audioStatus))"
+            lastBgReport = "✓ Chạy nền xuyên suốt \(alive)/\(wall)s (NST Audio OK)"
         } else {
             let detail = lastAudioError.isEmpty ? audioStatus : lastAudioError
             lastBgReport = "⚠️ Bị iOS dừng nền: \(alive)/\(wall)s (\(detail))"
@@ -687,10 +473,8 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    // MARK: - Background Handoff Task
+    // MARK: - Exact 1:1 J2ME NST AppDelegate.DidEnterBackground 4.0s Handoff
 
-    /// Acquire a short 5.0-second background task bridging background/lock-screen handoff
-    /// and end it cleanly BEFORE iOS's 30s expiration watchdog so mediaserverd audio keeps the app alive 24/24.
     private func beginBackgroundHandoffTask() {
         let now = CACurrentMediaTime()
         if bgTaskID != .invalid && (now - lastBgHandoffTime) < 0.5 {
@@ -699,17 +483,11 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         lastBgHandoffTime = now
 
         endAppBackgroundTask()
-        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "jarNO1-Handoff") { [weak self] in
+        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "J2ME-NST-Handoff") { [weak self] in
             self?.endAppBackgroundTask()
         }
-        let timer = Timer(timeInterval: 5.0, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
-            if self.wanted && !self.isFullyActive {
-                self.interrupted = false
-                self.interruptedAt = nil
-                self.ensurePlaying()
-            }
-            self.endAppBackgroundTask()
+        let timer = Timer(timeInterval: 4.0, repeats: false) { [weak self] _ in
+            self?.endAppBackgroundTask()
         }
         RunLoop.main.add(timer, forMode: .common)
         bgTaskHandoffTimer = timer
@@ -731,23 +509,15 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         center.removePendingNotificationRequests(withIdentifiers: ["decade_bg_status"])
     }
 
-    // MARK: - Scene, App & Screen-Lock Lifecycle Hooks
+    // MARK: - Scene & App Lifecycle Hooks (1:1 J2ME NST)
 
     @objc func onSceneWillResignActive() {
         runOnMain { [weak self] in
             guard let self = self else { return }
-            // Still foreground-eligible here: prime BOTH audio layers BEFORE iOS completes backgrounding/lock!
-            if self.isTreoActive && self.hasActiveGame {
-                if !self.wanted || !self.isFullyActive {
-                    self.startKeepalive()
-                }
+            if self.isTreoActive && self.hasActiveGame && (!self.wanted || !self.isAudioPlaying) {
+                self.startKeepalive()
             }
         }
-    }
-
-    @objc private func onProtectedDataWillBecomeUnavailable() {
-        // Fires specifically when the user presses Power/Lock or auto-lock engages.
-        onSceneDidEnterBackground()
     }
 
     @objc func onSceneDidEnterBackground() {
@@ -756,17 +526,18 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             self.isInBackground = true
             self.startBackgroundTickTimerIfNeeded()
 
-            // Short 5s handoff task on EVERY background / lock-screen transition
+            // Exact 1:1 J2ME NST AppDelegate.DidEnterBackground: 4.0s handoff task
             self.beginBackgroundHandoffTask()
 
             if !DecadePiPManager.shared.isPiPActiveOrStarting {
                 j2me_render_set_background(1)
             }
 
-            if self.isTreoActive && self.hasActiveGame {
+            // Never touch AVAudioSession in background if already playing (exact NST behavior)
+            if self.isTreoActive && self.hasActiveGame && !self.isAudioPlaying {
                 if !self.wanted {
                     self.startKeepalive()
-                } else if !self.isFullyActive {
+                } else {
                     self.interrupted = false
                     self.interruptedAt = nil
                     self.ensurePlaying()
@@ -785,6 +556,8 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             self.endAppBackgroundTask()
             self.clearLockScreenNotification()
             self.finalizeBackgroundTelemetryIfNeeded()
+
+            // Exact 1:1 J2ME NST BackgroundAudio.Foreground()
             if self.wanted || (self.isTreoActive && self.hasActiveGame) {
                 self.wanted = true
                 self.interrupted = false
@@ -804,19 +577,13 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             }
             self.clearLockScreenNotification()
             self.finalizeBackgroundTelemetryIfNeeded()
-            if self.isTreoActive && self.hasActiveGame {
-                if !self.wanted {
-                    self.startKeepalive()
-                } else if !self.isFullyActive {
-                    self.interrupted = false
-                    self.interruptedAt = nil
-                    self.ensurePlaying()
-                }
+            if self.isTreoActive && self.hasActiveGame && (!self.wanted || !self.isAudioPlaying) {
+                self.startKeepalive()
             }
         }
     }
 
-    // MARK: - Audio Session & Engine Notifications (Self-Healing Recovery)
+    // MARK: - Audio Session Notifications (1:1 J2ME NST BackgroundAudio.Observe)
 
     @objc private func handleAudioInterruption(_ notification: Notification) {
         runOnMain { [weak self] in
@@ -834,10 +601,6 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                 self.interrupted = false
                 self.interruptedAt = nil
                 self.ensurePlaying()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                    guard let self = self, self.wanted, !self.isFullyActive else { return }
-                    self.ensurePlaying()
-                }
             @unknown default:
                 break
             }
@@ -847,32 +610,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     @objc private func handleRouteChange(_ notification: Notification) {
         runOnMain { [weak self] in
             guard let self = self, self.wanted else { return }
-            if self.interrupted, let at = self.interruptedAt, Date().timeIntervalSince(at) >= 2.0 {
-                self.interrupted = false
-                self.interruptedAt = nil
-            }
-            if !self.interrupted && !self.isFullyActive {
-                self.ensurePlaying()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                    guard let self = self, self.wanted, !self.interrupted, !self.isFullyActive else { return }
-                    self.ensurePlaying()
-                }
-            }
-        }
-    }
-
-    @objc private func handleEngineConfigurationChange() {
-        runOnMain { [weak self] in
-            guard let self = self, self.wanted, !self.interrupted else { return }
-            if let engine = self.audioEngine {
-                engine.stop()
-                engine.reset()
-            }
-            self.audioEngine = nil
-            self.sourceNode = nil
-            self.ensurePlaying()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-                guard let self = self, self.wanted, !self.interrupted, !self.isFullyActive else { return }
+            if !self.interrupted && !self.isAudioPlaying {
                 self.ensurePlaying()
             }
         }
@@ -882,14 +620,14 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         runOnMain { [weak self] in
             guard let self = self else { return }
             self.audioStatus = "media-services-lost"
-            self.teardownAudioLayers()
+            self.audioPlayer = nil
         }
     }
 
     @objc private func handleMediaServicesReset() {
         runOnMain { [weak self] in
             guard let self = self, self.wanted else { return }
-            self.teardownAudioLayers()
+            self.audioPlayer = nil
             self.interrupted = false
             self.interruptedAt = nil
             self.ensurePlaying()

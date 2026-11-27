@@ -1786,7 +1786,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         if !DecadePiPManager.shared.isPiPActive {
             DecadePiPManager.shared.teardownPipeline()
         }
-        let delay: TimeInterval = wasAlreadyPlaying ? 0.35 : 0.6
+        let delay: TimeInterval = wasAlreadyPlaying ? 0.3 : 0.45
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             let suspendSel = NSSelectorFromString("suspend")
             if UIApplication.shared.responds(to: suspendSel) {

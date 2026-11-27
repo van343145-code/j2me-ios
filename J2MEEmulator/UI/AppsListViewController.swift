@@ -373,7 +373,7 @@ class AppsListViewController: UIViewController,
         }
 
         let alert = UIAlertController(
-            title: "Treo Game 24/24 (AURemoteIO + NST)",
+            title: "Treo Game 24/24 (1:1 Lõi J2ME NST)",
             message: "• Tự nhớ chạy ẩn & tắt màn: \(isTreo ? "ĐANG BẬT ✓" : "ĐANG TẮT")\n• Chế độ Audio: \(keeper.audioModeDescription)\n• Lõi giữ nền: \(audioState)\n• Lần tắt màn gần nhất: \(keeper.lastBgReport)\n• Mạng: \(netDesc) • RAM: \(Int(ramMB)) MB",
             preferredStyle: .actionSheet
         )
@@ -764,7 +764,7 @@ class AppsListViewController: UIViewController,
     @objc private func showAuthorInfo() {
         let alert = UIAlertController(
             title: "Vạn Trần idol J2me NSV IOS",
-            message: "Ứng dụng jarNO1 J2ME iOS Multi-Tab Engine — Native Edition.\nTác giả: Vạn Trần idol J2me NSV IOS\n• Chế độ Chơi Game Tuổi Thơ\n• Treo 24/24 Dual-Layer Audio (AURemoteIO + NST Loop)\n• Tự nhớ chạy ẩn đa nhiệm & tắt khóa màn hình không nghỉ\n• Cửa sổ nhỏ PiP kéo to nhỏ tự do ngoài màn hình chính.",
+            message: "Ứng dụng jarNO1 J2ME iOS Multi-Tab Engine — Native Edition.\nTác giả: Vạn Trần idol J2me NSV IOS\n• Chế độ Chơi Game Tuổi Thơ\n• Treo 24/24 Port 1:1 Lõi J2ME NST (background-loop.wav + AVAudioPlayer)\n• Tự nhớ chạy ẩn đa nhiệm & tắt khóa màn hình không nghỉ\n• Cửa sổ nhỏ PiP kéo to nhỏ tự do ngoài màn hình chính.",
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: "OK", style: .default))

@@ -101,23 +101,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.7-jarNO1
-          name: "jarNO1 iOS v1.0.7 (Nâng cấp Dual-Layer Audio AURemoteIO + chống bấm nhầm tắt + báo cáo chạy nền thực tế)"
+          tag_name: v1.0.8-jarNO1
+          name: "jarNO1 iOS v1.0.8 (Port sạch 1:1 nguyên lõi chạy nền J2ME NST 1.0.0 + sửa lag vào game)"
           body: |
-            ## jarNO1 iOS v1.0.7 — Sửa Triệt Để Lỗi Off Game Khi Ẩn Đa Nhiệm & Tắt Khóa Màn Hình
-            - **Nâng cấp lõi giữ nền Dual-Layer Audio chống đóng băng trên iOS 18/26**:
-              - **Sửa lỗi `silent.wav * volume 0.01 = 0.45 LSB` (`-97 dBFS`, bị tròn về 0)** ở bản v1.0.6 khiến `mediaserverd` coi là im lặng và đóng băng tiến trình sau 5 giây.
-              - **Lớp 1 (Mới — `AVAudioEngine` + `AVAudioSourceNode` `AURemoteIO`)**: chạy trực tiếp luồng phần cứng CoreAudio phát sóng siêu trầm 16 Hz ở mức `-50.5 dBFS` (`outputVolume = 1.0`) — hoàn toàn im lặng tuyệt đối với tai người và loa iPhone nhưng giữ kết nối phần cứng `mediaserverd` hoạt động liên tục 24/24 không ngắt quãng.
-              - **Lớp 2 (Dự phòng chuẩn NST — `AVAudioPlayer`)**: chạy song song vòng lặp `silent.wav` (16 Hz `-57 dBFS`) ở mức `volume = 1.0`, dùng đúng lệnh 2 tham số `setCategory:withOptions:error:` + `setActive:error:` khớp 1:1 với J2ME NST, tự phục hồi khi đổi route / khóa màn / cấu hình âm thanh thay đổi (`AVAudioEngineConfigurationChange`).
-              - **Thêm tùy chọn 1 chạm `Khóa Cứng Audio Độc Quyền`** trong tab `Treo 24/7` & `Cài Đặt Game` (mặc định là `Mix app khác` chuẩn NST để xem TikTok/YouTube song song; bật lên nếu muốn mức ưu tiên cao nhất khi treo khóa màn qua đêm).
-            - **Chống bấm nhầm tắt + Tự reset bật mặc định khi cài đè v1.0.7**:
-              - Nút trong menu `⋮` giờ hiển thị rõ ràng **`Treo 24/24: ĐANG BẬT ✓`** (xanh lá) / **`Treo 24/24: ĐANG TẮT`** (đỏ) để không bao giờ bị bấm nhầm tắt như trước; tự nâng cấp key lưu mới (`jarno1_treo_247_v7_off`) để bản v1.0.7 luôn mặc định **BẬT 24/24** ngay khi cài đặt.
-              - Gỡ bỏ công tắc ảo `Treo Định Vị BTS (0% Pin)` cũ không còn tác dụng trong `Cài Đặt Game`.
-            - **Đo kiểm chứng chạy nền thực tế ngay trên máy**:
-              - Mỗi lần mở khóa màn hình / quay lại app sau khi ẩn từ 8 giây trở lên, app sẽ tự hiện 1 dòng xác nhận thời gian CPU thực tế đã chạy ngầm (ví dụ: `✓ Chạy nền xuyên suốt 60/60s (Engine+Player OK)`) và lưu chi tiết trong tab `Treo 24/7`.
-            - **Sửa thêm 2 lỗi lõi native miniJVM**:
-              - Bảo toàn mã timeout `-2` trong `SocketNative.readByte` (`jni_io.c`) tránh biến timeout thành lỗi đóng kết nối.
-              - Sửa mốc thời gian tuyệt đối `TIME_UTC` cho `mtx_timedlock` trong `jthread_lock` (`jvm_util.c`) giảm spin CPU khi tranh chấp khóa.
+            ## jarNO1 iOS v1.0.8 — Port Sạch 1:1 Nguyên Bộ Lõi Chạy Nền J2ME NST 1.0.0
+            - **Sửa lỗi vào game bị chậm/khó vào ở v1.0.7**:
+              - Hoàn nguyên `jthread_lock` trong `jvm_util.c` (bỏ delay `nanosleep 5ms` trên mỗi lock tranh chấp của miniJVM khi nạp class lúc khởi động game).
+            - **Port sạch 100% 1:1 lõi `BackgroundAudio` + `AppDelegate` của `J2ME_NST_1.0.0.ipa`**:
+              - **Gỡ bỏ hoàn toàn `AVAudioEngine` / `AVAudioSourceNode` / `silent.wav` / `protectedDataWillBecomeUnavailable`**: loại bỏ triệt để nguyên nhân gây `AVAudioEngineConfigurationChange` khi khóa màn hình làm gián đoạn phiên âm thanh ở nền.
+              - **Dùng đúng 100% file `background-loop.wav` gốc của J2ME NST** (22050 Hz, 217 Hz, `peak=1603`, khớp SHA-256 từng byte) chạy bằng **`AVAudioPlayer` thuần** (`numberOfLoops = -1`, `volume = 0.0`, `prepareToPlay()`, `play()`) với đúng `AVAudioSession.setCategory(.playback, options: [.mixWithOthers])` + `setActive(true)`.
+              - **Kết hợp đúng 2 điều kiện cốt lõi chưa từng có cùng lúc ở các bản trước**: (1) PiP tách hoàn toàn dạng lazy (không tạo `AVPictureInPictureController` / `AVSampleBufferDisplayLayer` lúc mở game) + (2) chạy thuần `AVAudioPlayer` trên `background-loop.wav` gốc của NST + handoff 4.0s & monitor 5.0s y hệt NST.
+              - Giữ nguyên nút hiển thị rõ **`Treo 24/24: ĐANG BẬT ✓`**, tự nhớ vĩnh viễn khi vuốt đa nhiệm / khóa màn hình, tùy chọn 1 chạm **`Audio Độc quyền`** trong tab **`Treo 24/7`**, và dòng báo cáo chứng thực chạy nền thực tế khi mở khóa.
             - Giữ nguyên **không có chế độ Bong Bóng**, chỉ giữ **Cửa Sổ Nhỏ PiP kéo to nhỏ tự do** khi bật chủ động, đóng gói **unsigned sạch 100%** (`jarNO1.ipa`).
           files: |
             jarNO1.ipa

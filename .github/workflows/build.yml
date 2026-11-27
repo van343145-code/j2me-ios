@@ -100,16 +100,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.3-jarNO1
-          name: "jarNO1 iOS v1.0.3 (J2ME Decade + Port Lõi Mát Máy & Fix Tự Mở Hành Trang từ J2ME NST 1.0.0)"
+          tag_name: v1.0.4-jarNO1
+          name: "jarNO1 iOS v1.0.4 (Fix 1:1 Ẩn Ứng Dụng & Treo Chạy Nền chuẩn J2ME NST 1.0.0)"
           body: |
-            ## jarNO1 iOS v1.0.3 — J2ME Decade + Lõi Port từ J2ME NST 1.0.0.ipa
-            - **Giữ nguyên 100% lõi native `miniJVM` & giao diện `J2ME Decade`** (không WebView), đổi tên sạch sang **`jarNO1`** (`jarNO1.app`, `com.jarno1.j2me.ios`) và đóng gói **unsigned sạch 100%** (không `_CodeSignature`, không `LC_CODE_SIGNATURE`, khớp cấu trúc `J2ME-Decade.ipa` cài đặt chuẩn).
-            - **Fix triệt để lỗi tự mở Hành trang khi mở/quay lại game**: Loại bỏ lỗi `j2me_input_post_key(0, 0)` rơi vào `POINTER_PRESSED(0, 0)` trong `Display.java`, thay bằng mã sự kiện `J2ME_INPUT_FORCE_REPAINT (20)` riêng biệt.
-            - **Port lõi mát máy chuẩn `J2ME NST 1.0.0.ipa`**:
-              - Chuyển `Display.runEventLoop()` sang chờ sự kiện kernel `pthread_cond_timedwait` (`waitForInput`) — độ trễ bấm 0ms, bỏ polling 125 lần/giây tốn CPU.
-              - Mặc định **30 FPS** (áp dụng trực tiếp trong game không cần khởi động lại), tắt ép 3D supersampling 3x mặc định, tắt antialias/bilinear CoreGraphics cho sprite 2D (giữ chữ sắc nét), tự động giảm tải/ngắt render CG cho các tab ẩn không hiển thị.
-              - Thay `DecadeBackgroundKeeper` bằng lõi `BackgroundAudio` của `J2ME NST` (`AVAudioPlayer` phát `background-loop.wav` âm lượng `0.01`, chỉ chạy khi bật `Treo tắt màn`), tắt hoàn toàn `CLLocationManager` chạy ngầm, tắt HTTP HEAD polling 15 giây gây nóng sóng Wi-Fi/5G và bỏ private `BKSProcessAssertion`.
-              - Tối ưu chu kỳ GC `miniJVM` (10 giây / heap 48MB / 65%) giảm giật & đỉnh CPU.
+            ## jarNO1 iOS v1.0.4 — Fix 1:1 Ẩn Ứng Dụng & Treo Chạy Nền chuẩn J2ME NST 1.0.0.ipa
+            - **Khắc phục triệt để lỗi ẩn app / thoát ra ngoài là mất kết nối game** (đối chiếu ARM64 trực tiếp với `J2ME_NST_1.0.0.ipa`):
+              - Mặc định **BẬT Treo 24/24 (`isTreoActive = true` qua key đảo ngược `jarno1_sticky_off`, khớp 1:1 `App.Sticky` của `J2ME NST`)**: `AVAudioPlayer` (`background-loop.wav`, `.playback` + `.mixWithOthers`, `volume = 0.0`) được khởi chạy ngay khi vào game lúc app đang mở (foreground), đảm bảo iOS cấp quyền chạy nền trước khi bấm **Ẩn Ứng Dụng**, vuốt Home hay khóa màn hình.
+              - Thêm guard chặn gọi lại `AVAudioSession.setCategory` / `setActive(true)` khi `audioPlayer.isPlaying == true` và bỏ đăng ký trùng lặp `didEnterBackgroundNotification` giữa `SceneDelegate` & `NotificationCenter` (nguyên nhân làm ngắt audio session đúng lúc chuyển nền ở bản v1.0.3).
+              - Bổ sung timer bàn giao `beginBackgroundTask` 4.0 giây rồi `endBackgroundTask` sạch sẽ (khớp 1:1 `AppDelegate.DidEnterBackground` của `J2ME NST`).
+              - Tắt `canStartPictureInPictureAutomaticallyFromInline` và bỏ cờ `.allowBluetooth` sai chuẩn trên category `.playback` trong `DecadePiPManager` để không xung đột audio khi ẩn app.
+              - Sửa `forceExitGame()` chỉ dừng audio keepalive, không còn xóa mất thiết lập `Treo Khi Ra Ngoài` đã lưu.
+            - Giữ nguyên toàn bộ cải tiến từ v1.0.3: lõi native `miniJVM` + UI `J2ME Decade`, fix tự mở Hành trang, lõi mát máy 30 FPS / event-driven `waitForInput`, đóng gói **unsigned sạch 100%** (`jarNO1.ipa`).
           files: |
             jarNO1.ipa

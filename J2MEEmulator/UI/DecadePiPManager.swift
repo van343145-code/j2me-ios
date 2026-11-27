@@ -51,9 +51,13 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
     }
 
     func setupAudioSession() {
+        // Never disrupt DecadeBackgroundKeeper's live .playback + .mixWithOthers session!
+        if DecadeBackgroundKeeper.shared.isAudioPlaying {
+            return
+        }
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP, .allowAirPlay])
+            try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
         } catch {
             print("[PiP] AudioSession error: \(error)")
@@ -85,7 +89,9 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
 
         let controller = AVPictureInPictureController(contentSource: contentSource)
         controller.delegate = self
-        controller.canStartPictureInPictureAutomaticallyFromInline = true
+        // CRITICAL: Keep inline auto-PiP OFF so backgrounding / HideApp ("suspend")
+        // never triggers empty-layer media arbitration that interrupts BackgroundAudio!
+        controller.canStartPictureInPictureAutomaticallyFromInline = false
         controller.requiresLinearPlayback = true
         if controller.responds(to: Selector(("setControlsStyle:"))) {
             controller.setValue(1, forKey: "controlsStyle")

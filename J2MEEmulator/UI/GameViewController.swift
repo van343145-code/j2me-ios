@@ -299,7 +299,12 @@ class GameViewController: UIViewController, UITextFieldDelegate {
 
     // Decade state
     private var isKeepAwake = DecadeBackgroundKeeper.shared.isTreoActive
-    private var isOledSleeping = false
+    private var isOledSleeping = false {
+        didSet {
+            GameViewController.isOledSleepingActive = isOledSleeping
+        }
+    }
+    static var isOledSleepingActive = false
     private var isAutoCleanRam = true
     private var isKeypadHidden = false
     private var keypadCurrentHeight: CGFloat = 280
@@ -1699,13 +1704,23 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         }
     }
 
-    /// Ẩn ứng dụng xuống nền iOS (tương đương J2ME NST MicroController.HideApp: giữ Sticky + BackgroundAudio rồi thu gọn sau 0.3s)
+    /// Ẩn ứng dụng xuống nền iOS (khớp 1:1 J2ME NST MicroController.HideApp:
+    /// đảm bảo Sticky + BackgroundAudio đang chạy trước khi thu gọn sau 0.3s)
     private func hideAppToBackground() {
         isKeepAwake = true
-        DecadeBackgroundKeeper.shared.setTreoActive(true)
+        let wasAlreadyPlaying = DecadeBackgroundKeeper.shared.isAudioPlaying
+        if !DecadeBackgroundKeeper.shared.isTreoActive {
+            DecadeBackgroundKeeper.shared.setTreoActive(true)
+        }
         DecadeBackgroundKeeper.shared.startKeepalive()
-        showToast(message: "Đang ẩn ứng dụng chạy ngầm xuyên đêm...")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+        let status = DecadeBackgroundKeeper.shared.audioStatus
+        if status == "playing" {
+            showToast(message: "Đang ẩn chạy nền (Audio: OK)...")
+        } else {
+            showToast(message: "Đang ẩn chạy nền (\(status))...")
+        }
+        let delay: TimeInterval = wasAlreadyPlaying ? 0.3 : 0.5
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             let suspendSel = NSSelectorFromString("suspend")
             if UIApplication.shared.responds(to: suspendSel) {
                 UIApplication.shared.perform(suspendSel)
@@ -2765,6 +2780,9 @@ class GameViewController: UIViewController, UITextFieldDelegate {
 
     func minimizeToLobby() {
         isAppInBackground = false
+        if DecadeBackgroundKeeper.shared.isTreoActive {
+            DecadeBackgroundKeeper.shared.startKeepalive()
+        }
         dismiss(animated: true) {
             NotificationCenter.default.post(name: NSNotification.Name("DecadeGameRunningStateChanged"), object: nil)
         }
@@ -2773,6 +2791,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
     func forceExitGame() {
         guard !isShuttingDown else { return }
         isUserInitiatedExit = true
+        isOledSleeping = false
         restartingSlots.removeAll()
         backButton.isEnabled = false
         autoShutdownTimer?.invalidate()
@@ -2780,7 +2799,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         DecadeFloatingBubble.shared.hide()
         DecadeMiniWindow.shared.hide()
         DecadePiPManager.shared.stopPiP()
-        DecadeBackgroundKeeper.shared.setTreoActive(false)
+        // Only stop runtime audio keepalive — NEVER overwrite the user's saved isTreoActive preference!
         DecadeBackgroundKeeper.shared.stopKeepalive()
         UIApplication.shared.isIdleTimerDisabled = false
         for slot in tabWorkerSlots { jvm_bridge_request_stop_slot(Int32(slot)) }

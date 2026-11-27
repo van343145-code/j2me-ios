@@ -831,7 +831,7 @@ class DecadeConfigViewController: UIViewController {
         defaults.set(sFps, forKey: "fpsLimit_\(gid)")
         j2me_render_set_fps_limit(Int32(sFps))
 
-        defaults.set(treoSwitch.isOn, forKey: "decade_treo_tat_man_v2")
+        DecadeBackgroundKeeper.shared.setTreoActive(treoSwitch.isOn)
         defaults.set(locationModeSwitch.isOn, forKey: "decade_use_location_keepalive")
         defaults.set(soundSwitch.isOn, forKey: "decade_game_sound")
         defaults.set(fillScreenSwitch.isOn, forKey: "decade_fill_screen_\(gid)")

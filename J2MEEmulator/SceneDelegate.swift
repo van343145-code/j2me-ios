@@ -63,7 +63,7 @@ class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func sceneDidBecomeActive(_ scene: UIScene) {
         DecadeBackgroundKeeper.shared.clearLockScreenNotification()
-        DecadeBackgroundKeeper.shared.onSceneWillEnterForeground()
+        DecadeBackgroundKeeper.shared.onSceneDidBecomeActive()
     }
 
     func sceneWillResignActive(_ scene: UIScene) {

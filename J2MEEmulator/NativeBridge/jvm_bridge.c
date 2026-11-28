@@ -190,7 +190,7 @@ int jvm_bridge_init_slot(int slot, const char *res_root, const char *save_root, 
 
     jvm->jdwp_enable = 0;
     jvm->jdwp_suspend_on_start = 0;
-    jvm->max_heap_size = 512LL * 1024LL * 1024LL; // 512 MB matching J2ME NST LangNatives.MaxMemory
+    jvm->max_heap_size = 512LL * 1024LL * 1024LL; // 512 MB max heap ceiling
     jvm->garbage_collect_period_ms = 15000;
     jvm->heap_overload_percent = 75;
 

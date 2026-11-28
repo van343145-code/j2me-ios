@@ -2,7 +2,7 @@
 //  AppDelegate.swift
 //  J2MEEmulator
 //
-//  Clean lifecycle matching J2ME NST 1.0.0:
+//  Clean lifecycle management:
 //  - No automatic GPS / CLLocationManager wakeups on launch
 //  - No background audio / network keepalive spinning while idle on the home screen
 //  - Keeps all Decade UI notifications & orientation forwarding intact

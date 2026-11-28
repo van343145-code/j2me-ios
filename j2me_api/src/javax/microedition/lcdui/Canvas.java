@@ -178,7 +178,7 @@ public abstract class Canvas extends Displayable {
         }
     }
 
-    // FPS limiting (J2ME NST default 30 FPS + live native override)
+    // FPS limiting (default 30 FPS + live native override)
     private static int fpsLimit = 30;
     private long lastFrameTime = System.currentTimeMillis();
 
@@ -221,7 +221,7 @@ public abstract class Canvas extends Displayable {
         if (slots >= 4) {
             return 200L; // 5 FPS at x4-x10
         }
-        return BG_FRAME_INTERVAL_MS; // 10 FPS default matching J2ME NST BackgroundFps=10
+        return BG_FRAME_INTERVAL_MS; // 10 FPS default background cap
     }
 
     private void limitBgFps() {
@@ -234,7 +234,7 @@ public abstract class Canvas extends Displayable {
 
     /**
      * Release native offscreen CGContext buffer while this Canvas is hidden or backgrounded,
-     * matching NST CanvasView buffer eviction so 24 hidden tabs use 0 screen bitmap bytes.
+     * so 24 hidden tabs use 0 screen bitmap bytes.
      */
     void releaseHiddenContext() {
         if (nativeContext == 0 || !isRenderThrottled()) return;

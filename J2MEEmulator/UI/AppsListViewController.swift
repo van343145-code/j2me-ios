@@ -374,7 +374,7 @@ class AppsListViewController: UIViewController,
 
         let waitDiagLine = keeper.lastWaitDiag.isEmpty ? "" : "\n• Chẩn đoán wait: \(keeper.lastWaitDiag)"
         let alert = UIAlertController(
-            title: "Treo Game 24/24 (1:1 Lõi J2ME NST)",
+            title: "Treo Game 24/24 (Lõi Nền jarNO1)",
             message: "• Tự nhớ chạy ẩn & tắt màn: \(isTreo ? "ĐANG BẬT ✓" : "ĐANG TẮT")\n• Chế độ Audio: \(keeper.audioModeDescription)\n• Lõi giữ nền: \(audioState)\n• Lần tắt màn gần nhất: \(keeper.lastBgReport)\(waitDiagLine)\n• Mạng: \(netDesc) • RAM: \(Int(ramMB)) MB",
             preferredStyle: .actionSheet
         )
@@ -769,7 +769,7 @@ class AppsListViewController: UIViewController,
     @objc private func showTopMoreMenuActionSheet() {
         let alert = UIAlertController(title: "Cài Đặt & Tuỳ Chọn", message: nil, preferredStyle: .actionSheet)
         alert.addAction(UIAlertAction(title: "👑 Tác giả: Vạn Trần idol J2me NSV IOS", style: .default) { [weak self] _ in self?.showAuthorInfo() })
-        alert.addAction(UIAlertAction(title: "📐 Cỡ Màn Hình (Chuẩn NST)", style: .default) { [weak self] _ in self?.showGlobalScreenSizeDialog() })
+        alert.addAction(UIAlertAction(title: "📐 Cỡ Màn Hình (Size)", style: .default) { [weak self] _ in self?.showGlobalScreenSizeDialog() })
         alert.addAction(UIAlertAction(title: "🌐 Quản lý Proxy SOCKS5", style: .default) { [weak self] _ in self?.showProxyDialog() })
         alert.addAction(UIAlertAction(title: "🔄 Thay IP Phiên Bản", style: .default) { [weak self] _ in self?.showChangeIpDialog() })
         alert.addAction(UIAlertAction(title: "⚙ Thiết lập game", style: .default) { [weak self] _ in self?.showGlobalSettings() })
@@ -784,7 +784,7 @@ class AppsListViewController: UIViewController,
     @objc private func showAuthorInfo() {
         let alert = UIAlertController(
             title: "Vạn Trần idol J2me NSV IOS",
-            message: "Ứng dụng jarNO1 J2ME iOS Multi-Tab Engine — Native Edition.\nTác giả: Vạn Trần idol J2me NSV IOS\n• Chế độ Chơi Game Tuổi Thơ\n• Treo 24/24 Port 1:1 Lõi J2ME NST (background-loop.wav + AVAudioPlayer)\n• Tự nhớ chạy ẩn đa nhiệm & tắt khóa màn hình không nghỉ\n• Cửa sổ nhỏ PiP kéo to nhỏ tự do ngoài màn hình chính.",
+            message: "Ứng dụng jarNO1 J2ME iOS Multi-Tab Engine — Native Edition.\nTác giả: Vạn Trần idol J2me NSV IOS\n• Chế độ Chơi Game Tuổi Thơ & Gộp Setup Bàn Phím 1 chạm\n• Lõi treo đa tab x24 512MB & chạy nền AVAudioPlayer không nghỉ\n• Tự nhớ chạy ẩn đa nhiệm & tắt khóa màn hình 24/24\n• Cửa sổ nhỏ PiP kéo to nhỏ tự do ngoài màn hình chính.",
             preferredStyle: .alert
         )
         alert.addAction(UIAlertAction(title: "OK", style: .default))
@@ -809,7 +809,7 @@ class AppsListViewController: UIViewController,
         let defaults = UserDefaults.standard
         let initW = defaults.object(forKey: "jarno1_global_resW") as? Int ?? 360
         let initH = defaults.object(forKey: "jarno1_global_resH") as? Int ?? DecadeScreenSizeEditor.autoHeight(for: initW, keypadHidden: false)
-        DecadeScreenSizeEditor.presentNstCustomSizeAlert(
+        DecadeScreenSizeEditor.presentCustomSizeAlert(
             on: self,
             initialW: initW > 0 ? initW : 360,
             initialH: initH > 0 ? initH : DecadeScreenSizeEditor.autoHeight(for: 360, keypadHidden: false),

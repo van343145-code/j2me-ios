@@ -45,7 +45,7 @@ void j2me_render_set_split_view(int active);
 /// Query whether multi-slot split-view rendering is active.
 int j2me_render_is_split_view_active(void);
 
-/// Set live runtime FPS limit (0 = unlimited, default 30 matching J2ME NST). Takes effect immediately.
+/// Set live runtime FPS limit (0 = unlimited, default 30). Takes effect immediately.
 void j2me_render_set_fps_limit(int fps);
 
 /// Get current live runtime FPS limit.

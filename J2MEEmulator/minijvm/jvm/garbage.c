@@ -385,7 +385,7 @@ s32 _gc_thread_run(void *para) {
         int is_vis = jvm_bridge_is_jvm_visible(jvm);
         int slots = jvm_bridge_get_active_slot_count();
 
-        // Multi-tab x24 soft cap: allow 512MB max ceiling like J2ME NST while keeping
+        // Multi-tab x24 soft cap: allow 512MB max ceiling while keeping
         // hidden slots compact so 24 concurrent JVMs stay safely under iOS Jetsam limits.
         s64 soft_threshold = hard_threshold;
         if (in_bg || !is_vis) {

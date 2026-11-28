@@ -123,7 +123,7 @@ final class TuoiThoPopupMenuView: UIView {
         )
         contentStack.addArrangedSubview(btnGameSettings)
 
-        // 1a. Cỡ Màn Hình chuẩn NST (Size Rộng × Cao)
+        // 1a. Cỡ Màn Hình (Size Rộng × Cao)
         let btnScreenSize = makeMenuItem(
             iconName: "aspectratio.fill",
             iconColor: UIColor(red: 0.16, green: 0.49, blue: 0.85, alpha: 1.0),
@@ -188,7 +188,7 @@ final class TuoiThoPopupMenuView: UIView {
         updateTreo247Appearance()
         contentStack.addArrangedSubview(btnTreo247)
 
-        // 4f. Ẩn Ứng Dụng chạy ngầm (giống J2ME NST HideApp: tự bật & nhớ chạy ẩn 24/24 vĩnh viễn)
+        // 4f. Ẩn Ứng Dụng chạy ngầm (tự bật & nhớ chạy ẩn 24/24 vĩnh viễn)
         let btnHideApp = makeMenuItem(
             iconName: "eye.slash.circle.fill",
             iconColor: UIColor(red: 0.08, green: 0.56, blue: 0.46, alpha: 1.0),

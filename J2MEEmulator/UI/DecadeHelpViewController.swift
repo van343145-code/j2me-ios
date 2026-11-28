@@ -99,7 +99,7 @@ class DecadeHelpViewController: UIViewController {
 
         stack.addArrangedSubview(makeSectionCard(
             title: "8. Thông tin ứng dụng",
-            content: "• Ứng dụng: jarNO1 iOS Native (miniJVM + Lõi tối ưu mát máy chuẩn J2ME NST)\n• Tính năng nổi bật: Chơi và treo nhiều tab game J2ME, ẩn chạy ngầm tàng hình 24/24, cửa sổ nhỏ PiP kéo to nhỏ tự do ngoài màn hình chính."
+            content: "• Ứng dụng: jarNO1 iOS Native (miniJVM Multi-Tab Engine)\n• Tính năng nổi bật: Chơi và treo nhiều tab game J2ME, ẩn chạy ngầm 24/24, gộp setup bàn phím 1 chạm, cửa sổ nhỏ PiP kéo to nhỏ tự do ngoài màn hình chính."
         ))
     }
 

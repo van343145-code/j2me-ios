@@ -1424,6 +1424,8 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         if let kp = decadeKeypadView {
             kp.gameId = gid
             kp.currentLayout = DecadeKeypadLayout(rawValue: savedLayout) ?? .tuoitho
+            let diagKey = "keypad_diagonal_\(gid)"
+            kp.showDiagonalKeys = (d.object(forKey: diagKey) == nil) ? true : d.bool(forKey: diagKey)
             let savedAlpha = (d.object(forKey: "keypad_alpha_\(gid)") as? Float)
                 ?? (d.object(forKey: "keypad_alpha_\(legGid)") as? Float)
                 ?? 255.0
@@ -1564,7 +1566,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         let isFill = !isAspectFitEnabled
 
         let sheet = UIAlertController(
-            title: "Cỡ Màn Hình (Size) — Chuẩn NST",
+            title: "Cỡ Màn Hình (Size)",
             message: "Hiện tại: \(canvasWidth) × \(canvasHeight)\nRộng càng lớn nhìn càng rộng. Đổi cỡ sẽ khởi động lại tab hiện tại.",
             preferredStyle: .actionSheet
         )
@@ -1575,9 +1577,9 @@ class GameViewController: UIViewController, UITextFieldDelegate {
             self.restartGameSession()
         }
 
-        sheet.addAction(UIAlertAction(title: "📐 Nhập Rộng × Cao (Tự điền Cao như NST)...", style: .default) { [weak self] _ in
+        sheet.addAction(UIAlertAction(title: "📐 Nhập Rộng × Cao (Tự cân tỷ lệ)...", style: .default) { [weak self] _ in
             guard let self = self else { return }
-            DecadeScreenSizeEditor.presentNstCustomSizeAlert(
+            DecadeScreenSizeEditor.presentCustomSizeAlert(
                 on: self,
                 initialW: self.canvasWidth > 0 ? self.canvasWidth : autoSize.w,
                 initialH: self.canvasHeight > 0 ? self.canvasHeight : autoSize.h,
@@ -1835,16 +1837,15 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         DecadePiPManager.shared.startPiP(initialFrame: initialFrame)
     }
 
-    /// Ẩn ứng dụng xuống nền iOS (khớp 1:1 J2ME NST MicroController.HideApp:
-    /// tự bật & lưu vĩnh viễn chế độ Treo 24/24 để các lần sau vuốt đa nhiệm hay khóa màn hình
-    /// đều tự nhớ chạy ngầm liên tục không nghỉ).
+    /// Ẩn ứng dụng xuống nền iOS (tự bật & nhớ chế độ Treo 24/24 để các lần sau
+    /// vuốt đa nhiệm hay khóa màn hình đều tự nhớ chạy ngầm liên tục không nghỉ).
     private func hideAppToBackground() {
         isKeepAwake = true
         let wasAlreadyPlaying = DecadeBackgroundKeeper.shared.isFullyActive
         // Permanently persist "Treo 24/24" so every future multitasking swipe or screen lock auto-remembers!
         DecadeBackgroundKeeper.shared.setTreoActive(true)
         DecadeBackgroundKeeper.shared.startKeepalive()
-        // Tear down any inactive PiP video layer so screen-lock runs 100% pure audio-only like NST
+        // Tear down any inactive PiP video layer so screen-lock runs pure audio-only
         if !DecadePiPManager.shared.isPiPActive {
             DecadePiPManager.shared.teardownPipeline()
         }
@@ -1859,7 +1860,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         }
     }
 
-    /// Bật/tắt chế độ Treo tắt màn & chạy ẩn đa nhiệm 24/24 (khớp 1:1 ✓ Treo tắt màn của J2ME NST)
+    /// Bật/tắt chế độ Treo tắt màn & chạy ẩn đa nhiệm 24/24
     private func toggleTreoTatMan() {
         let next = !DecadeBackgroundKeeper.shared.isTreoActive
         isKeepAwake = next
@@ -1997,7 +1998,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         present(alert, animated: true)
     }
 
-    // Giới hạn FPS (áp dụng tức thì vào lõi render chuẩn J2ME NST)
+    // Giới hạn FPS (áp dụng tức thì vào lõi render)
     private func promptFPSLimit() {
         let curFps = Int(j2me_render_get_fps_limit())
         let curText = curFps == 0 ? "Không giới hạn" : "\(curFps) FPS"

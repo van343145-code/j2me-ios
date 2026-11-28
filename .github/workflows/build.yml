@@ -1,4 +1,4 @@
-name: Build jarNO1 iOS IPA (Decade + NST Cool Core)
+name: Build jarNO1 iOS IPA (Decade Engine)
 
 on:
   push:
@@ -74,7 +74,7 @@ jobs:
           cp -v J2MEEmulator/Resources/silent.wav "$BUNDLE_PATH/" || true
           cp -v J2MEEmulator/Resources/background-loop.wav "$BUNDLE_PATH/" || true
 
-          # Verify core Decade + NST files inside bundle
+          # Verify core bundle files inside app
           test -f "$BUNDLE_PATH/jarNO1"
           test -f "$BUNDLE_PATH/j2me_api.jar"
           test -f "$BUNDLE_PATH/minijvm_rt.jar"
@@ -101,18 +101,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.15-jarNO1
-          name: "jarNO1 iOS v1.0.15 (Gộp Setup Bàn Phím Tất-Cả-Trong-1 + Động cơ x24 512MB)"
+          tag_name: v1.0.16-jarNO1
+          name: "jarNO1 iOS v1.0.16 (Gộp Setup Bàn Phím + Fix 8 Hướng + Động Cơ x24 512MB)"
           body: |
-            ## jarNO1 iOS v1.0.15 — Gộp Toàn Bộ Setup Bàn Phím Thành 1 & Nền Tảng x24 512MB
-            - **Gộp toàn bộ chức năng Setup Bàn Phím về 1 nơi duy nhất (`DecadeKeyboardSetupViewController`, `TuoiThoPopupMenuView`, `GameViewController`, `DecadeConfigViewController`)**:
-              - Rút gọn menu `[⋮]` từ 4 dòng bàn phím rời rạc xuống còn **1 mục duy nhất: `Setup Bàn Phím`**.
-              - Xóa bỏ 6 hộp thoại/menu chồng chéo cũ; mở **1 bảng Setup Bàn Phím tổng hợp** (từ `[⋮] -> Setup Bàn Phím`, nhấn giữ `[🎮]`, hoặc từ `Cài Đặt Game -> Cài Đặt Bàn Phím`) gồm đầy đủ ngay trên 1 màn hình:
-                1. Bật / Tắt bàn phím ảo
-                2. Chọn kiểu bố cục (`Tuổi Thơ`, `Mũi Tên`, `Số`, `Kết Hợp`)
-                3. Chọn chiều cao (`Nhỏ / Vừa / Chuẩn / Lớn`) & độ mờ (`40% / 70% / 100%`)
-                4. Kéo thả di chuyển phím · Thu phóng 2 ngón · Khôi phục mặc định · Mở bàn phím gõ chữ QWERTY / IME
-                5. Tích chọn Ẩn / Hiện từng phím cụ thể (`1–9`, `*`, `#`, `Del`, `L`, `R`, `OK`, `↑ ↓ ← →`...)
-            - Giữ trọn toàn bộ tối ưu x24 & 512 MB từ `v1.0.14` (fix `g_native_extra_heap`, share sprite SHA-256, `mmap` JAR cache, xả `RenderContext` tab ẩn, Soft-GC & `-O3`).
+            ## jarNO1 iOS v1.0.16 — Gộp Setup Bàn Phím, Fix Bàn Phím 8 Hướng & Lõi x24 512MB
+            - **Fix hoàn chỉnh bàn phím 8 hướng (`DecadeKeypadView`)**:
+              - Bổ sung đầy đủ 4 phím chéo (`↖`, `↗`, `↙`, `↘`) vào D-Pad 3×3 gửi chuẩn 2 hướng J2ME cùng lúc; thêm công tắc bật/tắt 8 hướng ngay trong `Setup Bàn Phím`.
+              - Vô hiệu hóa `UIPanGestureRecognizer`/`UIPinchGestureRecognizer` ngoài chế độ chỉnh sửa để giữ/lướt phím di chuyển không bao giờ bị iOS ngắt cảm ứng (`touchCancel`).
+              - Độc lập hóa bộ đếm `repeatTimer` theo từng phím để giữ 8 hướng + bấm skill đa chạm không xung đột, và căn giữa cụm 8 hướng khi chọn bố cục `Mũi Tên`.
+            - **Gộp toàn bộ Setup Bàn Phím về 1 màn hình duy nhất**:
+              - Thu gọn menu `[⋮]` về đúng 1 mục `Setup Bàn Phím` (tổng hợp Bật/Tắt · 8 hướng · Kiểu · Cỡ · Độ mờ · Sắp xếp · Ẩn/hiện từng phím · QWERTY).
+            - **Làm sạch codebase & giữ nguyên lõi tối ưu đa tab x24 512MB** (`v1.0.14`).
           files: |
             jarNO1.ipa

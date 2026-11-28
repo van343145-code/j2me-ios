@@ -249,7 +249,7 @@ public class Display {
             }
             wasInBackground = !renderActive;
 
-            // Event-driven kernel wait (J2ME NST cool core):
+            // Event-driven kernel wait (low-CPU engine):
             // 0ms wake latency on touch/key/repaint, ~0% idle CPU (50ms fg / 1000ms bg or hidden tab).
             if (!MIDlet.isDestroyRequested() && !NativeBridge.isStopRequested()) {
                 try {

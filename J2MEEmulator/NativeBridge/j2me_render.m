@@ -95,10 +95,10 @@ static CGColorSpaceRef g_colorSpace = NULL;
 // check this and return NULL, so zombie threads can't touch freed resources.
 static volatile int g_render_stopped = 0;
 
-// Background & multi-slot low-CPU render bypass flags (ported from J2ME NST cool core)
+// Background & multi-slot low-CPU render bypass flags
 static _Atomic int g_is_background = 0;
 static _Atomic int g_split_view_active = 0;
-static _Atomic int g_dynamic_fps_limit = 30; // Default 30 FPS matching J2ME NST
+static _Atomic int g_dynamic_fps_limit = 30; // Default 30 FPS
 
 void j2me_render_set_background(int is_bg) {
     atomic_store_explicit(&g_is_background, is_bg ? 1 : 0, memory_order_release);
@@ -1719,10 +1719,10 @@ void j2me_render_cleanup(void) {
 }
 
 // ============================================================
-// Background Assertion stub (removed private BKSProcessAssertion XPC churn, matches J2ME NST)
+// Background Assertion stub (avoid private BKSProcessAssertion XPC churn)
 // ============================================================
 void decade_acquire_unlimited_background_assertion(void) {
-    // Clean no-op: J2ME NST uses standard public AVAudioPlayer background audio only.
+    // Clean no-op: uses standard public AVAudioPlayer background audio only.
 }
 
 void decade_release_unlimited_background_assertion(void) {

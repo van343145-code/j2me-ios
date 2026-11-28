@@ -2,16 +2,16 @@
 //  DecadeBackgroundKeeper.swift
 //  J2MEEmulator
 //
-//  EXACT 1:1 Port of J2ME NST 1.0.0 BackgroundAudio.cs + AppDelegate.cs:
-//  - Pure AVAudioPlayer playing J2ME NST's exact `background-loop.wav` (22050 Hz mono, 8s,
-//    217 Hz, peak=1603) with `numberOfLoops = -1`, `volume = 0.0`, `prepareToPlay()`, `play()`.
+//  Background audio keepalive manager (App + Scene lifecycle):
+//  - Pure AVAudioPlayer playing `background-loop.wav` with
+//    `numberOfLoops = -1`, `volume = 0.0`, `prepareToPlay()`, `play()`.
 //  - ZERO AVAudioEngine / AVAudioSourceNode (avoids lock-screen AVAudioEngineConfigurationChange
 //    teardown & background AVAudioSession reactivation failures on iOS 18/26).
 //  - ZERO eager AVPictureInPictureController / AVSampleBufferDisplayLayer at startup.
-//  - Uses exact 2-arg `AVAudioSession.setCategory(.playback, options: [.mixWithOthers])` +
-//    `setActive(true)` matching J2ME NST 1:1 (plus optional 1-tap Exclusive `.playback` mode).
-//  - Exact 5.0-second repeating RunLoop monitor + 4.0-second `beginBackgroundTask` handoff
-//    on `DidEnterBackground` (matching J2ME NST byte-for-byte).
+//  - Uses `AVAudioSession.setCategory(.playback, options: [.mixWithOthers])` +
+//    `setActive(true)` by default (plus optional 1-tap Exclusive `.playback` mode).
+//  - Includes 5.0-second repeating RunLoop monitor + 4.0-second `beginBackgroundTask` handoff
+//    on `DidEnterBackground`.
 //  - Permanently remembers `isTreoActive` (default TRUE) after enabling / tapping "Ẩn Ứng Dụng"
 //    once, so every future multitasking swipe or screen lock automatically stays running 24/24.
 //  - Includes passive 1-second background execution proof telemetry for on-device verification.
@@ -22,7 +22,7 @@ import AVFoundation
 import UserNotifications
 
 // ============================================================
-// MARK: - Decade Location Keeper (Disabled — Pure NST Core)
+// MARK: - Decade Location Keeper (Disabled)
 // ============================================================
 
 final class DecadeLocationKeeper: NSObject {
@@ -60,7 +60,7 @@ final class DecadeNetworkKeeper {
 }
 
 // ============================================================
-// MARK: - DecadeBackgroundKeeper (1:1 J2ME NST 1.0.0 Core)
+// MARK: - DecadeBackgroundKeeper (24/24 Background Audio Engine)
 // ============================================================
 
 final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
@@ -69,14 +69,13 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     /// Notification posted on foreground return after >= 8s in background so UI displays proof toast.
     static let backgroundResumeReportNotification = Notification.Name("DecadeBackgroundResumeReport")
 
-    /// Inverted key matching J2ME NST `App.Sticky` (`!NSUserDefaults.bool(forKey: "sticky_off")`).
     /// Defaults to TRUE on fresh install & permanently remembers preference across launches.
     private static let stickyOffKey = "jarno1_treo_247_v7_off"
 
-    /// Optional Exclusive `.playback` mode (OFF by default = `.mixWithOthers` matching J2ME NST 1:1).
+    /// Optional Exclusive `.playback` mode (OFF by default = `.mixWithOthers`).
     private static let exclusiveAudioKey = "jarno1_exclusive_audio_mode"
 
-    // Exact J2ME NST BackgroundAudio fields: _player, _monitor, _wanted, _interrupted
+    // Background audio player & monitor state
     private var audioPlayer: AVAudioPlayer?
     private var monitorTimer: Timer?
     private var bgTaskHandoffTimer: Timer?
@@ -145,7 +144,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     var audioModeDescription: String {
         return isExclusiveAudioMode
             ? "Độc quyền (Khóa cứng 24/24)"
-            : "Mix app khác (1:1 J2ME NST)"
+            : "Mix app khác (TikTok/YouTube)"
     }
 
     var isAutoCleanRamActive: Bool {
@@ -195,7 +194,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    /// Exact 1:1 J2ME NST `BackgroundAudio.Observe()` notifications
+    /// Audio session & interruption observers
     private func setupNotifications() {
         let nc = NotificationCenter.default
         let session = AVAudioSession.sharedInstance()
@@ -338,7 +337,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         ramCleanTimer = nil
     }
 
-    // MARK: - 1:1 J2ME NST BackgroundAudio Core (Start / Stop / Foreground / EnsurePlaying)
+    // MARK: - BackgroundAudio Core (Start / Stop / Foreground / EnsurePlaying)
 
     func startKeepalive() {
         runOnMain { [weak self] in
@@ -374,7 +373,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    /// Exact 1:1 J2ME NST 5.0-second repeating monitor timer + 5s Flight Recorder heartbeat
+    /// 5.0-second repeating monitor timer + Flight Recorder heartbeat
     private func startMonitorIfNeeded() {
         guard monitorTimer == nil else { return }
         let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
@@ -400,10 +399,10 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         monitorTimer = timer
     }
 
-    /// Exact 1:1 J2ME NST `BackgroundAudio.EnsurePlaying()`:
+    /// Ensure background silent audio loop keeps running cleanly:
     /// 1. If `audioPlayer.isPlaying` is already true -> immediately return WITHOUT touching AVAudioSession!
     /// 2. `AVAudioSession.setCategory(.playback, options: [.mixWithOthers])` + `setActive(true)`
-    /// 3. Load exact NST `background-loop.wav` (22050 Hz, 8s, 217 Hz, peak=1603)
+    /// 3. Load `background-loop.wav`
     /// 4. `numberOfLoops = -1`, `volume = 0.0`, `prepareToPlay()`, `play()`.
     private func ensurePlaying() {
         guard wanted, !interrupted else { return }
@@ -524,7 +523,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         if !isTreoActive {
             lastBgReport = "Treo 24/24 đang TẮT (\(alive)/\(wall)s)"
         } else if wall < 8 || alive >= max(2, Int(Double(wall) * 0.65)) {
-            lastBgReport = "✓ Chạy nền xuyên suốt \(max(alive, min(wall, 5)))/\(wall)s (NST Audio OK)"
+            lastBgReport = "✓ Chạy nền xuyên suốt \(max(alive, min(wall, 5)))/\(wall)s (Audio OK)"
         } else {
             let detail = lastAudioError.isEmpty ? audioStatus : lastAudioError
             lastBgReport = "⚠️ Bị iOS dừng nền: \(alive)/\(wall)s (\(detail))"
@@ -541,7 +540,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    // MARK: - Exact 1:1 J2ME NST AppDelegate.DidEnterBackground 4.0s Handoff
+    // MARK: - Background Transition 4.0s Handoff
 
     private func beginBackgroundHandoffTask() {
         let now = CACurrentMediaTime()
@@ -551,7 +550,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         lastBgHandoffTime = now
 
         endAppBackgroundTask()
-        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "J2ME-NST-Handoff") { [weak self] in
+        bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "jarNO1-BgHandoff") { [weak self] in
             self?.endAppBackgroundTask()
         }
         let timer = Timer(timeInterval: 4.0, repeats: false) { [weak self] _ in
@@ -577,7 +576,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         center.removePendingNotificationRequests(withIdentifiers: ["decade_bg_status"])
     }
 
-    // MARK: - Scene & App Lifecycle Hooks (1:1 J2ME NST)
+    // MARK: - Scene & App Lifecycle Hooks
 
     @objc func onSceneWillResignActive() {
         runOnMain { [weak self] in
@@ -593,7 +592,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             guard let self = self else { return }
             self.isInBackground = true
 
-            // Exact 1:1 J2ME NST AppDelegate.DidEnterBackground: 4.0s handoff task
+            // Request short 4.0s handoff task on background transition
             self.beginBackgroundHandoffTask()
 
             if !DecadePiPManager.shared.isPiPActiveOrStarting {
@@ -609,7 +608,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                 }
             }
 
-            // Never touch AVAudioSession in background if already playing (exact NST behavior)
+            // Never touch AVAudioSession in background if already playing
             if self.isTreoActive && self.hasActiveGame && !self.isAudioPlaying {
                 if !self.wanted {
                     self.startKeepalive()
@@ -635,7 +634,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
             self.clearLockScreenNotification()
             self.finalizeBackgroundTelemetryIfNeeded()
 
-            // Exact 1:1 J2ME NST BackgroundAudio.Foreground()
+            // Restore audio loop on foreground return
             if self.wanted || (self.isTreoActive && self.hasActiveGame) {
                 self.wanted = true
                 self.interrupted = false
@@ -661,7 +660,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    // MARK: - Audio Session Notifications (1:1 J2ME NST BackgroundAudio.Observe)
+    // MARK: - Audio Session Notifications
 
     @objc private func handleAudioInterruption(_ notification: Notification) {
         runOnMain { [weak self] in

@@ -24,15 +24,16 @@ enum DecadeKeyStyle {
     case del
     case slash
     case dpadMint
+    case dpadDiag
     case dpadOk
 }
 
 class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
-    private var repeatTimer: Timer?
-    private var activeCode1: Int32 = 0
-    private var activeCode2: Int32 = 0
+    private var buttonRepeatTimers: [ObjectIdentifier: Timer] = [:]
+    private var editPanGestures: [UIPanGestureRecognizer] = []
+    private var editPinchGestures: [UIPinchGestureRecognizer] = []
 
     var onTextInputTapped: (() -> Void)?
     var onMenuTapped: (() -> Void)?
@@ -44,6 +45,7 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
     var gameId: String = "default" {
         didSet {
             loadSavedCustomLayout()
+            loadDiagonalPreference()
             rebuildKeypad()
         }
     }
@@ -55,8 +57,12 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
         }
     }
 
-    var showDiagonalKeys: Bool = false {
-        didSet { rebuildKeypad() }
+    var showDiagonalKeys: Bool = true {
+        didSet {
+            if oldValue != showDiagonalKeys {
+                rebuildKeypad()
+            }
+        }
     }
     var showSoftKeys: Bool = true {
         didSet { rebuildKeypad() }
@@ -140,7 +146,28 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
         ])
 
         loadSavedCustomLayout()
+        loadDiagonalPreference()
         rebuildKeypad()
+    }
+
+    deinit {
+        stopAllRepeatTimers()
+    }
+
+    private func loadDiagonalPreference() {
+        let key = "keypad_diagonal_\(gameId)"
+        if UserDefaults.standard.object(forKey: key) == nil {
+            showDiagonalKeys = true
+        } else {
+            showDiagonalKeys = UserDefaults.standard.bool(forKey: key)
+        }
+    }
+
+    private func stopAllRepeatTimers() {
+        for (_, t) in buttonRepeatTimers {
+            t.invalidate()
+        }
+        buttonRepeatTimers.removeAll()
     }
 
     override func layoutSubviews() {
@@ -153,6 +180,9 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
     // ============================================================
 
     func rebuildKeypad() {
+        stopAllRepeatTimers()
+        editPanGestures.removeAll()
+        editPinchGestures.removeAll()
         buttons.forEach { $0.removeFromSuperview() }
         buttons.removeAll()
 
@@ -170,6 +200,20 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
         }
 
         var items: [KeyItem] = []
+
+        func appendDpadKeys() {
+            if showDiagonalKeys {
+                items.append(KeyItem(title: "arrow.up.left", subtitle: nil, c1: -1, c2: -3, style: .dpadDiag, pane: 2, col: 0, row: 0, spanCols: 1, spanRows: 1))
+                items.append(KeyItem(title: "arrow.up.right", subtitle: nil, c1: -1, c2: -4, style: .dpadDiag, pane: 2, col: 2, row: 0, spanCols: 1, spanRows: 1))
+                items.append(KeyItem(title: "arrow.down.left", subtitle: nil, c1: -2, c2: -3, style: .dpadDiag, pane: 2, col: 0, row: 2, spanCols: 1, spanRows: 1))
+                items.append(KeyItem(title: "arrow.down.right", subtitle: nil, c1: -2, c2: -4, style: .dpadDiag, pane: 2, col: 2, row: 2, spanCols: 1, spanRows: 1))
+            }
+            items.append(KeyItem(title: "chevron.up", subtitle: nil, c1: -1, c2: 0, style: .dpadMint, pane: 2, col: 1, row: 0, spanCols: 1, spanRows: 1))
+            items.append(KeyItem(title: "chevron.left", subtitle: nil, c1: -3, c2: 0, style: .dpadMint, pane: 2, col: 0, row: 1, spanCols: 1, spanRows: 1))
+            items.append(KeyItem(title: "OK", subtitle: nil, c1: -5, c2: 0, style: .dpadOk, pane: 2, col: 1, row: 1, spanCols: 1, spanRows: 1))
+            items.append(KeyItem(title: "chevron.right", subtitle: nil, c1: -4, c2: 0, style: .dpadMint, pane: 2, col: 2, row: 1, spanCols: 1, spanRows: 1))
+            items.append(KeyItem(title: "chevron.down", subtitle: nil, c1: -2, c2: 0, style: .dpadMint, pane: 2, col: 1, row: 2, spanCols: 1, spanRows: 1))
+        }
 
         switch currentLayout {
         case .tuoitho:
@@ -192,22 +236,14 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
             items.append(KeyItem(title: "Del", subtitle: nil, c1: 8, c2: 0, style: .del, pane: 1, col: 0, row: 4, spanCols: 2, spanRows: 1))
             items.append(KeyItem(title: "/", subtitle: nil, c1: 47, c2: 0, style: .slash, pane: 1, col: 2, row: 4, spanCols: 1, spanRows: 1))
 
-            // Right Pane: D-Pad Navigation Cluster
-            items.append(KeyItem(title: "chevron.up", subtitle: nil, c1: -1, c2: 0, style: .dpadMint, pane: 2, col: 1, row: 0, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "chevron.left", subtitle: nil, c1: -3, c2: 0, style: .dpadMint, pane: 2, col: 0, row: 1, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "OK", subtitle: nil, c1: -5, c2: 0, style: .dpadOk, pane: 2, col: 1, row: 1, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "chevron.right", subtitle: nil, c1: -4, c2: 0, style: .dpadMint, pane: 2, col: 2, row: 1, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "chevron.down", subtitle: nil, c1: -2, c2: 0, style: .dpadMint, pane: 2, col: 1, row: 2, spanCols: 1, spanRows: 1))
+            // Right Pane: 8-Way D-Pad Navigation Cluster
+            appendDpadKeys()
 
         case .arrows:
-            // Chỉ Mũi Tên
+            // Chỉ Mũi Tên (8 hướng căn giữa rộng rãi)
             items.append(KeyItem(title: "L", subtitle: nil, c1: -6, c2: 0, style: .softkey, pane: 0, col: 0, row: 0, spanCols: 1, spanRows: 1))
             items.append(KeyItem(title: "R", subtitle: nil, c1: -7, c2: 0, style: .softkey, pane: 0, col: 1, row: 0, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "chevron.up", subtitle: nil, c1: -1, c2: 0, style: .dpadMint, pane: 2, col: 1, row: 0, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "chevron.left", subtitle: nil, c1: -3, c2: 0, style: .dpadMint, pane: 2, col: 0, row: 1, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "OK", subtitle: nil, c1: -5, c2: 0, style: .dpadOk, pane: 2, col: 1, row: 1, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "chevron.right", subtitle: nil, c1: -4, c2: 0, style: .dpadMint, pane: 2, col: 2, row: 1, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "chevron.down", subtitle: nil, c1: -2, c2: 0, style: .dpadMint, pane: 2, col: 1, row: 2, spanCols: 1, spanRows: 1))
+            appendDpadKeys()
 
         case .numpad:
             // Phone Numpad
@@ -224,7 +260,7 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
             }
 
         case .combined:
-            // Combined
+            // Combined (Numpad + 8-Way D-Pad)
             items.append(KeyItem(title: "L", subtitle: nil, c1: -6, c2: 0, style: .softkey, pane: 0, col: 0, row: 0, spanCols: 1, spanRows: 1))
             items.append(KeyItem(title: "R", subtitle: nil, c1: -7, c2: 0, style: .softkey, pane: 0, col: 1, row: 0, spanCols: 1, spanRows: 1))
             let allNums: [(String, String?, Int32, Int, Int)] = [
@@ -236,11 +272,7 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
             for (title, sub, code, c, r) in allNums {
                 items.append(KeyItem(title: title, subtitle: sub, c1: code, c2: 0, style: .whiteCard, pane: 1, col: c, row: r, spanCols: 1, spanRows: 1))
             }
-            items.append(KeyItem(title: "chevron.up", subtitle: nil, c1: -1, c2: 0, style: .dpadMint, pane: 2, col: 1, row: 0, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "chevron.left", subtitle: nil, c1: -3, c2: 0, style: .dpadMint, pane: 2, col: 0, row: 1, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "OK", subtitle: nil, c1: -5, c2: 0, style: .dpadOk, pane: 2, col: 1, row: 1, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "chevron.right", subtitle: nil, c1: -4, c2: 0, style: .dpadMint, pane: 2, col: 2, row: 1, spanCols: 1, spanRows: 1))
-            items.append(KeyItem(title: "chevron.down", subtitle: nil, c1: -2, c2: 0, style: .dpadMint, pane: 2, col: 1, row: 2, spanCols: 1, spanRows: 1))
+            appendDpadKeys()
         }
 
         for item in items {
@@ -261,15 +293,20 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
             btn.addTarget(self, action: #selector(buttonDown(_:)), for: .touchDown)
             btn.addTarget(self, action: #selector(buttonUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
 
-            // Edit gesture
+            // Edit gestures — disabled during normal gameplay so holding 8-way keys never cancels touches!
             let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
             pan.delegate = self
+            pan.isEnabled = isEditLayoutMode
             btn.addGestureRecognizer(pan)
+            editPanGestures.append(pan)
 
             let pinch = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
             pinch.delegate = self
+            pinch.isEnabled = isResizeLayoutMode
             btn.addGestureRecognizer(pinch)
+            editPinchGestures.append(pinch)
 
+            btn.alpha = keypadAlphaValue
             containerView.addSubview(btn)
             buttons.append(btn)
         }
@@ -295,10 +332,19 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
         let startY = topMargin + softkeyH + 6
         let availH = containerH - startY - 4
 
+        let hasLeftPane = buttons.contains { $0.pane == 1 }
         let hasRightPane = buttons.contains { $0.pane == 2 }
         let leftW: CGFloat = hasRightPane ? (containerW - gap) * 0.58 : containerW
-        let rightW: CGFloat = containerW - leftW - gap
-        let rightX: CGFloat = leftW + gap
+        let rightW: CGFloat
+        let rightX: CGFloat
+        if !hasLeftPane && hasRightPane {
+            // Dedicated 8-way Arrows mode: center spacious 3x3 D-pad
+            rightW = min(containerW * 0.78, availH * 1.15)
+            rightX = (containerW - rightW) * 0.5
+        } else {
+            rightW = containerW - leftW - gap
+            rightX = leftW + gap
+        }
 
         // Grid measurements
         let leftRows: CGFloat = 5
@@ -365,8 +411,6 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
     @objc private func buttonDown(_ sender: DecadeKeyButton) {
         guard !isEditLayoutMode && !isResizeLayoutMode else { return }
         haptic.impactOccurred(intensity: 0.6)
-        activeCode1 = sender.c1
-        activeCode2 = sender.c2
 
         UIView.animate(withDuration: 0.08) {
             sender.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
@@ -376,23 +420,28 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
         // Send KEY_PRESSED ONCE (never duplicate KEY_PRESSED on hold!)
         postKey(type: Int32(J2ME_INPUT_KEY_PRESSED), c1: sender.c1, c2: sender.c2)
 
-        // Standard J2ME hardware repeat: wait 0.35s initial delay, then emit KEY_REPEATED every 0.10s
-        repeatTimer?.invalidate()
+        // Independent per-button repeat timer so multi-touch (moving + hitting skills) works cleanly!
+        let bid = ObjectIdentifier(sender)
+        buttonRepeatTimers[bid]?.invalidate()
         let c1 = sender.c1
         let c2 = sender.c2
-        repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self] _ in
-            guard let self = self else { return }
+        let initialTimer = Timer.scheduledTimer(withTimeInterval: 0.35, repeats: false) { [weak self, weak sender] _ in
+            guard let self = self, sender != nil else { return }
             self.postKey(type: Int32(J2ME_INPUT_KEY_REPEATED), c1: c1, c2: c2)
-            self.repeatTimer = Timer.scheduledTimer(withTimeInterval: 0.10, repeats: true) { [weak self] _ in
-                self?.postKey(type: Int32(J2ME_INPUT_KEY_REPEATED), c1: c1, c2: c2)
+            let rep = Timer.scheduledTimer(withTimeInterval: 0.10, repeats: true) { [weak self, weak sender] t in
+                guard let self = self, sender != nil else { t.invalidate(); return }
+                self.postKey(type: Int32(J2ME_INPUT_KEY_REPEATED), c1: c1, c2: c2)
             }
+            self.buttonRepeatTimers[bid] = rep
         }
+        buttonRepeatTimers[bid] = initialTimer
     }
 
     @objc private func buttonUp(_ sender: DecadeKeyButton) {
         guard !isEditLayoutMode && !isResizeLayoutMode else { return }
-        repeatTimer?.invalidate()
-        repeatTimer = nil
+        let bid = ObjectIdentifier(sender)
+        buttonRepeatTimers[bid]?.invalidate()
+        buttonRepeatTimers.removeValue(forKey: bid)
 
         UIView.animate(withDuration: 0.1) {
             sender.transform = .identity
@@ -401,8 +450,6 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
 
         // Always release the exact key codes belonging to this button
         postKey(type: Int32(J2ME_INPUT_KEY_RELEASED), c1: sender.c1, c2: sender.c2)
-        if activeCode1 == sender.c1 { activeCode1 = 0 }
-        if activeCode2 == sender.c2 { activeCode2 = 0 }
     }
 
     private func postKey(type: Int32, c1: Int32, c2: Int32) {
@@ -489,6 +536,12 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
     }
 
     private func updateEditModeAppearance() {
+        for pan in editPanGestures {
+            pan.isEnabled = isEditLayoutMode
+        }
+        for pinch in editPinchGestures {
+            pinch.isEnabled = isResizeLayoutMode
+        }
         for btn in buttons {
             if isEditLayoutMode || isResizeLayoutMode {
                 btn.layer.borderWidth = 2.0
@@ -507,6 +560,10 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
                 || (title == "chevron.down" && (hiddenKeys.contains("↓") || hiddenKeys.contains("Xuống")))
                 || (title == "chevron.left" && (hiddenKeys.contains("←") || hiddenKeys.contains("Trái")))
                 || (title == "chevron.right" && (hiddenKeys.contains("→") || hiddenKeys.contains("Phải")))
+                || (title == "arrow.up.left" && hiddenKeys.contains("↖"))
+                || (title == "arrow.up.right" && hiddenKeys.contains("↗"))
+                || (title == "arrow.down.left" && hiddenKeys.contains("↙"))
+                || (title == "arrow.down.right" && hiddenKeys.contains("↘"))
             btn.isHidden = isHidden
         }
     }
@@ -607,30 +664,25 @@ class DecadeKeyButton: UIButton {
             titleLbl.textColor = UIColor(red: 0.10, green: 0.14, blue: 0.10, alpha: 1.0)
             setupBorder()
 
-        case .dpadMint:
-            backgroundColor = UIColor(red: 0.88, green: 0.96, blue: 0.88, alpha: 1.0) // Mint #E8F5E9
+        case .dpadMint, .dpadDiag:
+            backgroundColor = (style == .dpadDiag)
+                ? UIColor(red: 0.92, green: 0.97, blue: 0.93, alpha: 1.0)
+                : UIColor(red: 0.88, green: 0.96, blue: 0.88, alpha: 1.0) // Mint #E8F5E9
             layer.cornerRadius = 11
 
-            let sfName: String
-            switch keyTitle {
-            case "chevron.up": sfName = "chevron.up"
-            case "chevron.down": sfName = "chevron.down"
-            case "chevron.left": sfName = "chevron.left"
-            case "chevron.right": sfName = "chevron.right"
-            default: sfName = keyTitle
-            }
-
+            let sfName = keyTitle
             let iv = UIImageView(image: UIImage(systemName: sfName))
             iv.tintColor = UIColor(red: 0.18, green: 0.52, blue: 0.24, alpha: 1.0) // Green #2E7D32
             iv.contentMode = .scaleAspectFit
             iv.translatesAutoresizingMaskIntoConstraints = false
             addSubview(iv)
 
+            let iconDim: CGFloat = (style == .dpadDiag) ? 16 : 20
             NSLayoutConstraint.activate([
                 iv.centerXAnchor.constraint(equalTo: centerXAnchor),
                 iv.centerYAnchor.constraint(equalTo: centerYAnchor),
-                iv.widthAnchor.constraint(equalToConstant: 20),
-                iv.heightAnchor.constraint(equalToConstant: 20)
+                iv.widthAnchor.constraint(equalToConstant: iconDim),
+                iv.heightAnchor.constraint(equalToConstant: iconDim)
             ])
             setupBorder()
 

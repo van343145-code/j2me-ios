@@ -44,7 +44,7 @@ class DecadeConfigViewController: UIViewController {
     private var resButtons: [PillButton] = []
 
     // State for Khung Hình / Giây
-    private var selectedFpsIndex: Int = 3 // 30 FPS default (matches J2ME NST)
+    private var selectedFpsIndex: Int = 3 // 30 FPS default
     private let fpsOptions: [Int] = [10, 15, 20, 30, 60]
     private var fpsButtons: [PillButton] = []
 
@@ -634,7 +634,7 @@ class DecadeConfigViewController: UIViewController {
         if sender.tag == 5 {
             let initW = customScreenWidth > 0 ? customScreenWidth : 360
             let initH = customScreenHeight > 0 ? customScreenHeight : DecadeScreenSizeEditor.autoHeight(for: initW, keypadHidden: UserDefaults.standard.bool(forKey: "keypad_hidden_\(gid)"))
-            DecadeScreenSizeEditor.presentNstCustomSizeAlert(
+            DecadeScreenSizeEditor.presentCustomSizeAlert(
                 on: self,
                 initialW: initW,
                 initialH: initH,
@@ -827,7 +827,7 @@ class DecadeConfigViewController: UIViewController {
             btn.isSelectedState = (i == selectedResIndex)
         }
 
-        // FPS (default 30 matching J2ME NST)
+        // FPS (default 30)
         let savedFps = defaults.object(forKey: "fpsLimit_\(gid)") as? Int ?? 30
         selectedFpsIndex = fpsOptions.firstIndex(of: savedFps) ?? 3
         for (i, btn) in fpsButtons.enumerated() {
@@ -837,7 +837,7 @@ class DecadeConfigViewController: UIViewController {
         // Treo khi ra ngoài: Mặc định luôn là TRUE
         treoSwitch.isOn = DecadeBackgroundKeeper.shared.isTreoActive
 
-        // Khóa cứng Audio độc quyền: Mặc định FALSE (Mix app khác chuẩn NST)
+        // Khóa cứng Audio độc quyền: Mặc định FALSE (Mix app khác)
         exclusiveAudioSwitch.isOn = DecadeBackgroundKeeper.shared.isExclusiveAudioMode
 
         // Co Giãn Kín Màn Hình: Mặc định tắt (FALSE) để giữ chuẩn form game gốc không méo hình
@@ -898,7 +898,7 @@ class DecadeConfigViewController: UIViewController {
 }
 
 // ============================================================
-// MARK: - NST-style Screen Size Editor (Rộng × Cao tự điền tỷ lệ)
+// MARK: - Smart Screen Size Editor (Rộng × Cao tự điền tỷ lệ)
 // ============================================================
 
 final class DecadeScreenSizeEditor {
@@ -996,7 +996,7 @@ final class DecadeScreenSizeEditor {
         d.synchronize()
     }
 
-    static func presentNstCustomSizeAlert(
+    static func presentCustomSizeAlert(
         on vc: UIViewController,
         initialW: Int,
         initialH: Int,
@@ -1005,7 +1005,7 @@ final class DecadeScreenSizeEditor {
         onApply: @escaping (_ w: Int, _ h: Int, _ applyAll: Bool) -> Void
     ) {
         let alert = UIAlertController(
-            title: "Cỡ Màn Hình (Chuẩn NST)",
+            title: "Cỡ Màn Hình (Size)",
             message: "Rộng càng lớn nhìn càng rộng, Cao tự điền cho vừa màn (sửa được).\nNhập 0 để dùng tự động vừa màn.",
             preferredStyle: .alert
         )
@@ -1044,7 +1044,7 @@ final class DecadeScreenSizeEditor {
             alert.addAction(UIAlertAction(title: "Áp cho game này", style: .default) { _ in
                 parseAndApply(false)
             })
-            alert.addAction(UIAlertAction(title: "Áp cho mọi game (NST)", style: .default) { _ in
+            alert.addAction(UIAlertAction(title: "Áp cho mọi game", style: .default) { _ in
                 parseAndApply(true)
             })
         } else {

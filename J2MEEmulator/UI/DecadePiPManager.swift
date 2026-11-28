@@ -7,7 +7,7 @@
 //  on the Home Screen and over other apps (drag anywhere + pinch to resize freely).
 //  Bubble mode has been completely removed.
 //
-//  CRITICAL FOR 24/24 LOCK-SCREEN BACKGROUND EXECUTION (matching J2ME NST):
+//  CRITICAL FOR 24/24 LOCK-SCREEN BACKGROUND EXECUTION:
 //  - NEVER instantiates AVSampleBufferDisplayLayer or AVPictureInPictureController
 //    at launch or in viewDidLoad()!
 //  - Creates them strictly on demand when the user taps "Cửa Sổ Nhỏ Ngoài Màn Hình",
@@ -60,7 +60,7 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
     }
 
     /// Registers the host view WITHOUT creating AVSampleBufferDisplayLayer or AVPictureInPictureController.
-    /// Keeps the process 100% pure audio-only (matching J2ME NST) until the user explicitly opens PiP.
+    /// Keeps the process pure audio-only until the user explicitly opens PiP.
     func setup(sourceView: UIView) {
         self.sourceView = sourceView
     }
@@ -102,7 +102,7 @@ final class DecadePiPManager: NSObject, AVPictureInPictureControllerDelegate, AV
         )
         let controller = AVPictureInPictureController(contentSource: contentSource)
         controller.delegate = self
-        // Keep inline auto-PiP off so normal NST invisible hide ("Ẩn ứng dụng") & screen lock stay silent.
+        // Keep inline auto-PiP off so normal invisible hide ("Ẩn ứng dụng") & screen lock stay silent.
         controller.canStartPictureInPictureAutomaticallyFromInline = false
         controller.requiresLinearPlayback = true
         if controller.responds(to: Selector(("setControlsStyle:"))) {

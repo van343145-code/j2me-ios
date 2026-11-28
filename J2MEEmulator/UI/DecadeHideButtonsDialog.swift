@@ -314,11 +314,13 @@ final class DecadeKeyboardSetupViewController: UIViewController, UITableViewData
 
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
     private let visibleSwitch = UISwitch()
+    private let diagonalSwitch = UISwitch()
     private let layoutSegment = UISegmentedControl(items: ["Tuổi Thơ", "Mũi Tên", "Số", "Kết Hợp"])
     private let heightSegment = UISegmentedControl(items: ["Nhỏ", "Vừa", "Chuẩn", "Lớn"])
     private let alphaSegment = UISegmentedControl(items: ["Mờ 40%", "Vừa 70%", "Rõ 100%"])
 
     private var isKeypadVisible: Bool = true
+    private var isDiagonalEnabled: Bool = true
     private var selectedLayout: Int = 0
     private var selectedHeightIdx: Int = 2
     private var selectedAlphaIdx: Int = 2
@@ -377,6 +379,9 @@ final class DecadeKeyboardSetupViewController: UIViewController, UITableViewData
         let hidden = d.bool(forKey: "keypad_hidden_\(gameId)")
         isKeypadVisible = !hidden
 
+        let diagKey = "keypad_diagonal_\(gameId)"
+        isDiagonalEnabled = (d.object(forKey: diagKey) == nil) ? true : d.bool(forKey: diagKey)
+
         selectedLayout = (d.object(forKey: "keypad_layout_\(gameId)") as? Int)
             ?? (legacyGameId.flatMap { d.object(forKey: "keypad_layout_\($0)") as? Int })
             ?? 0
@@ -406,6 +411,7 @@ final class DecadeKeyboardSetupViewController: UIViewController, UITableViewData
     private func saveAll() {
         let d = UserDefaults.standard
         d.set(!isKeypadVisible, forKey: "keypad_hidden_\(gameId)")
+        d.set(isDiagonalEnabled, forKey: "keypad_diagonal_\(gameId)")
         d.set(selectedLayout, forKey: "keypad_layout_\(gameId)")
         d.set(Double(heightPresets[selectedHeightIdx].value), forKey: "keypad_height_\(gameId)")
         d.set(alphaPresets[selectedAlphaIdx].value, forKey: "keypad_alpha_\(gameId)")
@@ -425,6 +431,10 @@ final class DecadeKeyboardSetupViewController: UIViewController, UITableViewData
         visibleSwitch.onTintColor = UIColor(red: 0.18, green: 0.58, blue: 0.28, alpha: 1.0)
         visibleSwitch.addTarget(self, action: #selector(visibilityChanged), for: .valueChanged)
 
+        diagonalSwitch.isOn = isDiagonalEnabled
+        diagonalSwitch.onTintColor = UIColor(red: 0.18, green: 0.58, blue: 0.28, alpha: 1.0)
+        diagonalSwitch.addTarget(self, action: #selector(diagonalChanged), for: .valueChanged)
+
         layoutSegment.selectedSegmentIndex = selectedLayout
         layoutSegment.addTarget(self, action: #selector(layoutChanged), for: .valueChanged)
 
@@ -437,6 +447,11 @@ final class DecadeKeyboardSetupViewController: UIViewController, UITableViewData
 
     @objc private func visibilityChanged() {
         isKeypadVisible = visibleSwitch.isOn
+        saveAll()
+    }
+
+    @objc private func diagonalChanged() {
+        isDiagonalEnabled = diagonalSwitch.isOn
         saveAll()
     }
 
@@ -491,7 +506,7 @@ final class DecadeKeyboardSetupViewController: UIViewController, UITableViewData
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        if section == 0 { return 2 }
+        if section == 0 { return 3 }
         if section == 1 { return 2 }
         if inGame && section == 2 {
             var count = 5 // Kéo thả, Thu phóng, Mặc định, QWERTY, Nhập nhanh IME
@@ -502,7 +517,7 @@ final class DecadeKeyboardSetupViewController: UIViewController, UITableViewData
     }
 
     func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
-        if indexPath.section == 0 && indexPath.row == 1 { return 58 }
+        if indexPath.section == 0 && indexPath.row == 2 { return 58 }
         if indexPath.section == 1 { return 58 }
         return 46
     }
@@ -546,6 +561,14 @@ final class DecadeKeyboardSetupViewController: UIViewController, UITableViewData
                 cell.textLabel?.text = "Hiện bàn phím ảo"
                 cell.textLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
                 cell.accessoryView = visibleSwitch
+                return cell
+            } else if indexPath.row == 1 {
+                cell.selectionStyle = .none
+                cell.imageView?.image = UIImage(systemName: "arrow.up.left.and.down.right.and.arrow.up.right.and.down.left")
+                cell.imageView?.tintColor = UIColor(red: 0.18, green: 0.58, blue: 0.28, alpha: 1.0)
+                cell.textLabel?.text = "Bàn phím 8 hướng (↖ ↗ ↙ ↘)"
+                cell.textLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+                cell.accessoryView = diagonalSwitch
                 return cell
             } else {
                 embedControlRow(cell, title: "Kiểu bố cục bàn phím", control: layoutSegment)

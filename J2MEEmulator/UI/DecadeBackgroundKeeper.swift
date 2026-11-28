@@ -45,142 +45,21 @@ final class DecadeLocationKeeper: NSObject {
 }
 
 // ============================================================
-// MARK: - Decade Network Keeper (Background Anti-Wi-Fi-Sleep & CGNAT Keepalive)
+// MARK: - Decade Network Keeper (Passive Stub — 1:1 J2ME NST)
 // ============================================================
 
 final class DecadeNetworkKeeper {
     static let shared = DecadeNetworkKeeper()
 
-    private let monitorQueue = DispatchQueue(label: "jarno1.network.keeper", qos: .utility)
-    private var pathMonitor: NWPathMonitor?
-    private var heartbeatTimer: DispatchSourceTimer?
-    private let probeSession: URLSession
-
     private(set) var isRunning = false
     private(set) var isInBackground = false
     private(set) var isNetworkConnected = true
-    private(set) var lastProbeDate: Date?
-    private var lastPathKey: String = ""
-    private var endpointIndex = 0
 
-    // Ultra-lightweight 0-byte HTTP 204/captive endpoints: keep Wi-Fi/Cellular radios awake off-screen
-    // with virtually zero data & battery impact.
-    private let probeEndpoints = [
-        "http://connectivitycheck.gstatic.com/generate_204",
-        "http://captive.apple.com/hotspot-detect.html",
-        "http://cp.cloudflare.com/generate_204"
-    ]
+    private init() { }
 
-    private init() {
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.timeoutIntervalForRequest = 4.0
-        cfg.timeoutIntervalForResource = 6.0
-        cfg.waitsForConnectivity = false
-        cfg.allowsCellularAccess = true
-        cfg.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        cfg.urlCache = nil
-        probeSession = URLSession(configuration: cfg)
-    }
-
-    func start() {
-        isRunning = true
-        startPathMonitor()
-        updateHeartbeatSchedule(sendImmediately: isInBackground)
-    }
-
-    func stop() {
-        isRunning = false
-        isInBackground = false
-        stopHeartbeat()
-        pathMonitor?.cancel()
-        pathMonitor = nil
-    }
-
-    func setBackgroundActive(_ active: Bool) {
-        let transitionedToBg = active && !isInBackground
-        isInBackground = active
-        if active {
-            DispatchQueue.global(qos: .utility).async {
-                jvm_bridge_refresh_all_sockets()
-            }
-        }
-        updateHeartbeatSchedule(sendImmediately: transitionedToBg)
-    }
-
-    private func startPathMonitor() {
-        guard pathMonitor == nil else { return }
-        let monitor = NWPathMonitor()
-        monitor.pathUpdateHandler = { [weak self] path in
-            let connected = (path.status == .satisfied)
-            let ifKey = "\(connected)-\(path.usesInterfaceType(.wifi))-\(path.usesInterfaceType(.cellular))"
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                let changed = (ifKey != self.lastPathKey)
-                self.lastPathKey = ifKey
-                self.isNetworkConnected = connected
-                if changed && connected {
-                    DispatchQueue.global(qos: .utility).async {
-                        jvm_bridge_refresh_all_sockets()
-                    }
-                    if self.isRunning && self.isInBackground {
-                        self.sendWakeProbe()
-                    }
-                }
-            }
-        }
-        monitor.start(queue: monitorQueue)
-        pathMonitor = monitor
-    }
-
-    private func updateHeartbeatSchedule(sendImmediately: Bool) {
-        guard isRunning && isInBackground else {
-            stopHeartbeat()
-            return
-        }
-        if sendImmediately {
-            sendWakeProbe()
-        }
-        guard heartbeatTimer == nil else { return }
-        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        timer.schedule(deadline: .now() + 18.0, repeating: 18.0)
-        timer.setEventHandler { [weak self] in
-            DispatchQueue.main.async {
-                guard let self = self, self.isRunning, self.isInBackground else { return }
-                self.sendWakeProbe()
-            }
-        }
-        timer.resume()
-        heartbeatTimer = timer
-    }
-
-    private func stopHeartbeat() {
-        heartbeatTimer?.cancel()
-        heartbeatTimer = nil
-    }
-
-    private func sendWakeProbe() {
-        if let last = lastProbeDate, Date().timeIntervalSince(last) < 5.0 {
-            return
-        }
-        lastProbeDate = Date()
-
-        let urlStr = probeEndpoints[endpointIndex % probeEndpoints.count]
-        endpointIndex += 1
-        guard let url = URL(string: urlStr) else { return }
-
-        var req = URLRequest(url: url)
-        req.httpMethod = "HEAD"
-        req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        req.timeoutInterval = 4.0
-
-        probeSession.dataTask(with: req) { _, response, _ in
-            if let http = response as? HTTPURLResponse, (200...204).contains(http.statusCode) {
-                DispatchQueue.main.async { [weak self] in
-                    self?.isNetworkConnected = true
-                }
-            }
-        }.resume()
-    }
+    func start() { isRunning = true }
+    func stop() { isRunning = false; isInBackground = false }
+    func setBackgroundActive(_ active: Bool) { isInBackground = active }
 }
 
 // ============================================================
@@ -258,18 +137,12 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     }
 
     var isExclusiveAudioMode: Bool {
-        get {
-            return UserDefaults.standard.bool(forKey: Self.exclusiveAudioKey)
-        }
-        set {
-            setExclusiveAudioMode(newValue)
-        }
+        get { false }
+        set { }
     }
 
     var audioModeDescription: String {
-        return isExclusiveAudioMode
-            ? "Độc quyền (Tự chuyển Mix khi mở app khác)"
-            : "Mix app khác (Khuyên dùng - YouTube/TikTok)"
+        return "Audio Nền 24/24 (Mix app khác)"
     }
 
     var isAutoCleanRamActive: Bool {
@@ -507,14 +380,13 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    /// 2.0-second repeating monitor timer + Flight Recorder heartbeat
+    /// 5.0-second repeating monitor timer (exact 1:1 J2ME NST BackgroundAudio)
     private func startMonitorIfNeeded() {
         guard monitorTimer == nil else { return }
-        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
             guard let self = self, self.wanted else { return }
             if self.interrupted {
-                // Self-heal if iOS drops `.ended` after a transient notification/lock transition
-                if let at = self.interruptedAt, Date().timeIntervalSince(at) >= 2.0 {
+                if let at = self.interruptedAt, Date().timeIntervalSince(at) >= 3.0 {
                     self.interrupted = false
                     self.interruptedAt = nil
                     self.ensurePlaying()
@@ -533,12 +405,10 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         monitorTimer = timer
     }
 
-    /// Ensure background audio keepalive loop keeps running cleanly:
-    /// 1. If `audioPlayer.isPlaying` is already true -> immediately return WITHOUT touching AVAudioSession!
-    /// 2. `AVAudioSession.setCategory(.playback, mode: .default, options: ...)` + `setActive(true)`
-    ///    - Automatically falls back to `[.mixWithOthers]` if NonMixable activation fails in background
-    ///      (e.g. iOS 26 `audiomxd` error `-12985`: "Operation denied. Cannot interrupt others").
-    /// 3. Load `silent.wav` (16Hz, -57.2 dBFS, rms=31.8 LSB) at `volume = 1.0`, `numberOfLoops = -1`.
+    /// Exact 1:1 J2ME NST BackgroundAudio.EnsurePlaying():
+    /// 1. If `audioPlayer.isPlaying` is already true -> immediately return WITHOUT touching AVAudioSession.
+    /// 2. Single audio mode: `AVAudioSession.setCategory(.playback, options: [.mixWithOthers])` + `setActive(true)`.
+    /// 3. Load `background-loop.wav` (22050 Hz mono, 8.00s, -35.35 dBFS), `numberOfLoops = -1`, `volume = 0.0`, `prepareToPlay()`, `play()`.
     private func ensurePlaying(forceMixable: Bool = false) {
         guard wanted, !interrupted else { return }
 
@@ -548,52 +418,31 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
 
         let session = AVAudioSession.sharedInstance()
-        let useMixable = forceMixable || !isExclusiveAudioMode
-        let options: AVAudioSession.CategoryOptions = useMixable ? [.mixWithOthers] : []
         do {
-            try session.setCategory(.playback, mode: .default, options: options)
+            try session.setCategory(.playback, options: [.mixWithOthers])
             try session.setActive(true)
         } catch {
-            if !useMixable {
-                // NonMixable failed (e.g. -12985 when YouTube/TikTok/Facebook is active in foreground).
-                // Immediately fall back to [.mixWithOthers] so audiomxd grants isPlayingProcessAssertion
-                // without interrupting the foreground app!
-                do {
-                    try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
-                    try session.setActive(true)
-                } catch let fallbackError {
-                    let nsErr = fallbackError as NSError
-                    lastAudioError = "sess(\(nsErr.code)): \(nsErr.localizedDescription)"
-                    audioStatus = "error(\(nsErr.code))"
-                    print("[BackgroundAudio] AVAudioSession mixable fallback error: \(fallbackError)")
-                    return
-                }
-            } else {
-                let nsErr = error as NSError
-                lastAudioError = "sess(\(nsErr.code)): \(nsErr.localizedDescription)"
-                audioStatus = "error(\(nsErr.code))"
-                print("[BackgroundAudio] AVAudioSession error: \(error)")
-                return
-            }
+            let nsErr = error as NSError
+            lastAudioError = "sess(\(nsErr.code)): \(nsErr.localizedDescription)"
+            audioStatus = "error(\(nsErr.code))"
+            print("[BackgroundAudio] AVAudioSession error: \(error)")
+            return
         }
 
         if audioPlayer == nil {
-            let wavURL = Bundle.main.url(forResource: "silent", withExtension: "wav")
-                ?? Bundle.main.url(forResource: "background-loop", withExtension: "wav")
+            let wavURL = Bundle.main.url(forResource: "background-loop", withExtension: "wav")
+                ?? Bundle.main.url(forResource: "silent", withExtension: "wav")
             guard let url = wavURL else {
-                lastAudioError = "missing silent.wav"
+                lastAudioError = "missing background-loop.wav"
                 audioStatus = "error(no-wav)"
-                print("[BackgroundAudio] Missing silent.wav / background-loop.wav in bundle")
+                print("[BackgroundAudio] Missing background-loop.wav in bundle")
                 return
             }
             do {
                 let p = try AVAudioPlayer(contentsOf: url)
                 p.delegate = self
                 p.numberOfLoops = -1
-                // silent.wav is a 16Hz subsonic sine wave (-57.2 dBFS, rms=31.8 LSB):
-                // physically inaudible on iPhone speakers/headphones at volume=1.0 while staying
-                // well above iOS 16-26 mediaserverd silence-detection thresholds (~-72 dBFS).
-                p.volume = (url.lastPathComponent == "silent.wav") ? 1.0 : 0.02
+                p.volume = 0.0
                 audioPlayer = p
             } catch {
                 let nsErr = error as NSError
@@ -715,7 +564,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                 self.ensurePlaying()
             }
         }
-        let timer = Timer(timeInterval: 20.0, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: 4.0, repeats: false) { [weak self] _ in
             self?.endAppBackgroundTask()
         }
         RunLoop.main.add(timer, forMode: .common)

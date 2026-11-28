@@ -403,21 +403,6 @@ class DecadeConfigViewController: UIViewController {
         // Divider
         cardStack.addArrangedSubview(makeDivider())
 
-        // Item 2a: Audio Độc Quyền (Mặc định TẮT = Mix app khác để xem YouTube/TikTok không bị out)
-        let exclusiveRow = makeToggleRow(
-            icon: "waveform.circle.fill",
-            iconBg: UIColor(red: 0.88, green: 0.93, blue: 1.0, alpha: 1.0),
-            iconTint: UIColor(red: 0.10, green: 0.45, blue: 0.95, alpha: 1.0),
-            title: "Audio Độc Quyền (Chỉ khi khóa màn)",
-            subtitle: "Tắt (Khuyên dùng): Xem YouTube/TikTok không out",
-            toggle: exclusiveAudioSwitch,
-            action: #selector(exclusiveAudioSwitchChanged(_:))
-        )
-        cardStack.addArrangedSubview(exclusiveRow)
-
-        // Divider
-        cardStack.addArrangedSubview(makeDivider())
-
         // Item 2b: Tự Động Dọn RAM (Giải phóng bộ nhớ định kỳ khi treo lâu)
         let ramRow = makeToggleRow(
             icon: "sparkles",

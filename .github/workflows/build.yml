@@ -101,16 +101,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.12-jarNO1
-          name: "jarNO1 iOS v1.0.12 (Chỉnh Size màn hình chuẩn NST + tối ưu treo 24/24 mát máy & mượt ping)"
+          tag_name: v1.0.13-jarNO1
+          name: "jarNO1 iOS v1.0.13 (Fix dứt điểm iOS kill 45p: CPU 50%, RAM 221MB & jthread_lock spin)"
           body: |
-            ## jarNO1 iOS v1.0.12 — Chỉnh Cỡ Màn Hình Chuẩn NST + Tối Ưu Mát Máy & Mượt Ping
-            - **Thêm mục `Cỡ Màn Hình (Size)` chuẩn J2ME NST**:
-              - Có ngay trong **Menu 3 chấm `[⋮]` khi đang chơi**, trong **Cài Đặt Game → Tự Chọn**, và trong tab **Cài Đặt → Cỡ Màn Hình (Chuẩn NST)**.
-              - Nhập **Rộng (Width)** bất kỳ (`120..1200`), **Cao (Height)** tự điền theo đúng tỷ lệ khung màn hình (và vẫn sửa tay được), chọn nhanh preset, bật/tắt **Ép toàn màn** tức thì, và tuỳ chọn **Áp cho game này** hoặc **Áp cho mọi game**.
-            - **Tối ưu treo 24/24 mát máy & mượt ping mạng**:
-              - Thay `thrd_yield()` bằng `threadSleep(2)` + kiểm tra `is_interrupt` ở `writeBuf`/`writeByte` (`jni_io.c`) khi gặp `MBEDTLS_ERR_SSL_WANT_WRITE`.
-              - Bật `IP_TOS`/`IPV6_TCLASS` (`IPTOS_LOWDELAY`), `TCP_NOTSENT_LOWAT = 16KB`, `SO_NET_SERVICE_TYPE = NET_SERVICE_TYPE_RD`, `TCP_NODELAY` trước bắt tay proxy (`decade_proxy_tunnel.c`), và timeout connect `10s` (`net_sockets.c`).
-              - Giảm ~92% ghi ổ đĩa nền `UserDefaults` Flight Recorder (`5s` → `60s`, `DecadeBackgroundKeeper.swift`).
+            ## jarNO1 iOS v1.0.13 — Fix Dứt Điểm iOS Dừng Nền (CPU 50% / RAM 221MB / `jthread_lock` spin)
+            - **Fix `Canvas.repaint()` không giảm nhịp FPS nền (`Canvas.java`)**:
+              - Trước đây ngưỡng anti-spin nền chỉ chặn khi `> 60 FPS`, nên game 30–40 FPS (như `NSOVTIDOL`) vẫn chạy full 40 tick/giây khi tắt màn -> ăn liên tục **50% CPU** và bị iOS bắn `CPU_FATAL` sau ~45 phút.
+              - Nay ép nhịp nền mượt **`10 FPS` (`100 ms/tick`)** qua `limitBgFps()` -> hạ CPU nền từ **50% xuống ~12%** trong khi auto đánh/nhặt/buff vẫn mượt 100%.
+            - **Fix `jthread_lock()` quay vòng 100% CPU (`jvm_util.c`)**:
+              - Thay `mtx_timedlock` với `t.tv_sec = 0` (epoch 1970 đã hết hạn, khiến Darwin fail tức thì và quay `sched_yield` 100% CPU) bằng `mtx_trylock` + `jthread_block_enter/exit` + ngủ lũy tiến (`5ms` nền / `1ms` tiền cảnh).
+              - Mở rộng giới hạn ngủ fallback `r1` (`jthread_waitTime`) lên `1000ms` khi chạy nền.
+            - **Fix RAM phình lên 221MB khi treo lâu (`garbage.c`)**:
+              - Gọi `malloc_zone_pressure_relief(NULL, 0)` ngay sau mỗi chu kỳ GC chạy nền để trả bộ nhớ đã giải phóng về lại nhân iOS, chặn Jetsam kill app.
           files: |
             jarNO1.ipa

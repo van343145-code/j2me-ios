@@ -314,6 +314,10 @@ void gc_dump_runtime(GcCollector *collector) {
 }
 
 
+#if defined(__APPLE__) || defined(__MACH__)
+#include <malloc/malloc.h>
+#endif
+
 // External native memory counter & background/shell hooks from j2me_render.m.
 // Allows GC to account for native memory pressure, throttle background wakeups,
 // and purge deferred dead CGContext/CGImage shells even when rendering is bypassed.
@@ -376,6 +380,12 @@ s32 _gc_thread_run(void *para) {
         if (collector->lastgc == 0 || (cur_mil - collector->lastgc) >= effective_period || heap >= threshold) {
             _garbage_collect(collector);
             collector->lastgc = currentTimeMillis();
+#if defined(__APPLE__) || defined(__MACH__)
+            if (in_bg) {
+                // Return freed malloc pages back to iOS kernel during background GC to prevent 220MB+ Jetsam creep.
+                malloc_zone_pressure_relief(NULL, 0);
+            }
+#endif
         }
         // Always sleep after GC check/run so a steady live heap >= threshold never
         // tight-loops _garbage_collect at 100% CPU (prevents iOS background CPU_FATAL SIGKILL).

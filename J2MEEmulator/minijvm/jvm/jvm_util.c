@@ -901,17 +901,23 @@ s32 jthread_lock(MemoryBlock *mb, Runtime *runtime) { //可能会重入，同一
 #if _JVM_DEBUG_LOG_LEVEL > 5
     s64 waitTime = currentTimeMillis();
 #endif
-    struct timespec t;
-    t.tv_nsec = 5 * NANO_2_MILLS_SCALE;
-    t.tv_sec = 0;
-    //can pause when lock
-    while (mtx_timedlock(&jtl->mutex_lock, &t) != thrd_success) {
-        check_suspend_and_pause(runtime);
-        if (runtime->thrd_info->type == THREAD_TYPE_JDWP) {
-            break;
+    // Try fast uncontended acquire first; if contended, mark thread blocked for GC and sleep progressively
+    // (replaces the old t.tv_sec=0 expired-epoch mtx_timedlock busy-spin that burned 100% CPU on Darwin).
+    if (mtx_trylock(&jtl->mutex_lock) != thrd_success) {
+        jthread_block_enter(runtime);
+        while (mtx_trylock(&jtl->mutex_lock) != thrd_success) {
+            check_suspend_and_pause(runtime);
+            if (runtime->thrd_info->type == THREAD_TYPE_JDWP) {
+                break;
+            }
+            if (i < 4) {
+                jthread_yield(runtime);
+            } else {
+                threadSleep(j2me_render_is_background() ? 5 : 1);
+            }
+            i++;
         }
-        jthread_yield(runtime);
-        i++;
+        jthread_block_exit(runtime);
     }
 
     //获得锁之后，检查是否锁重入
@@ -1062,8 +1068,10 @@ s32 jthread_waitTime(MemoryBlock *mb, Runtime *runtime, s64 waitms) {
     // returns EPERM in <1us and would otherwise cause a 100%-CPU tight spin).
     if (saveThread != current_thread || saveCount <= 0) {
         _record_wait_diag_helper(runtime, waitms, -1, saveCount, 1);
-        s64 sleep_ms = waitms > 0 ? (waitms < 250 ? waitms : 250) : (j2me_render_is_background() ? 25 : 10);
-        if (sleep_ms < 25 && j2me_render_is_background()) sleep_ms = 25;
+        int in_bg = j2me_render_is_background();
+        s64 max_cap = in_bg ? 1000 : 250;
+        s64 sleep_ms = waitms > 0 ? (waitms < max_cap ? waitms : max_cap) : (in_bg ? 250 : 10);
+        if (sleep_ms < 25 && in_bg) sleep_ms = 25;
         threadSleep(sleep_ms);
         runtime->thrd_info->thread_status = thread_status;
         runtime->thrd_info->curThreadLock = NULL;

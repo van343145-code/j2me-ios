@@ -75,10 +75,8 @@ public abstract class Canvas extends Displayable {
      * PaintEvent implements Event and EventFilter, exactly matching J2ME-Loader.
      * All repaints and dirty rect accumulations are serialized on paintEvent.clip.
      */
-    private static final long BG_FRAME_INTERVAL_MS = 250L; // ~4 FPS cool pace in background / hidden tabs
+    private static final long BG_FRAME_INTERVAL_MS = 100L; // ~10 FPS cool pace in background / hidden tabs (keeps auto smooth, prevents iOS 50% CPU_FATAL)
     private volatile boolean pendingBgFlush = false;
-    private long bgRepaintWindowStart = 0L;
-    private int bgRepaintWindowCount = 0;
 
     private static boolean isRenderThrottled() {
         try {
@@ -255,16 +253,9 @@ public abstract class Canvas extends Displayable {
         if (!throttled) {
             limitFps();
         } else {
-            // Anti-spin guard for games that rely on repaint()/serviceRepaints() for frame pacing:
-            // normal 25-30 FPS games (like NSO) never trigger this, while spin loops are capped
-            // below iOS background CPU watchdog limits.
-            long nowMs = System.currentTimeMillis();
-            if (nowMs - bgRepaintWindowStart >= 1000L) {
-                bgRepaintWindowStart = nowMs;
-                bgRepaintWindowCount = 1;
-            } else if (++bgRepaintWindowCount > 60) {
-                try { Thread.sleep(12L); } catch (InterruptedException ignored) {}
-            }
+            // Pace game loop to ~10 FPS in background so 30-40 FPS games (like NSOVTIDOL/NSO)
+            // stay well below iOS's 50% background CPU_FATAL watchdog while auto-farm stays responsive.
+            limitBgFps();
         }
         boolean post;
         synchronized (paintEvent.clip) {

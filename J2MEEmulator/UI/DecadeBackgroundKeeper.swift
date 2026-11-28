@@ -198,6 +198,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
 
     /// Optional Exclusive `.playback` mode (OFF by default = `.mixWithOthers`).
     private static let exclusiveAudioKey = "jarno1_exclusive_audio_mode"
+    private static let mixAudioMigratedV19Key = "jarno1_mix_audio_migrated_v19"
 
     // Background audio player & monitor state
     private var audioPlayer: AVAudioPlayer?
@@ -267,8 +268,8 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
 
     var audioModeDescription: String {
         return isExclusiveAudioMode
-            ? "Độc quyền (Khóa cứng 24/24)"
-            : "Mix app khác (TikTok/YouTube)"
+            ? "Độc quyền (Tự chuyển Mix khi mở app khác)"
+            : "Mix app khác (Khuyên dùng - YouTube/TikTok)"
     }
 
     var isAutoCleanRamActive: Bool {
@@ -285,6 +286,15 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
 
     private override init() {
         super.init()
+        // One-time v1.0.19 migration: reset legacy "exclusive" toggle to Mixable (.mixWithOthers)
+        // because iOS 26 audiomxd interrupts [NonMixable] sessions when YouTube/TikTok/Facebook play
+        // and rejects background reactivation with -12985 (Operation denied. Cannot interrupt others).
+        let d = UserDefaults.standard
+        if !d.bool(forKey: Self.mixAudioMigratedV19Key) {
+            d.set(false, forKey: Self.exclusiveAudioKey)
+            d.set(true, forKey: Self.mixAudioMigratedV19Key)
+            d.synchronize()
+        }
         loadPreviousFlightRecord()
         setupNotifications()
         if isAutoCleanRamActive {
@@ -526,9 +536,10 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     /// Ensure background audio keepalive loop keeps running cleanly:
     /// 1. If `audioPlayer.isPlaying` is already true -> immediately return WITHOUT touching AVAudioSession!
     /// 2. `AVAudioSession.setCategory(.playback, mode: .default, options: ...)` + `setActive(true)`
-    /// 3. Load `background-loop.wav`
-    /// 4. `numberOfLoops = -1`, non-zero inaudible `volume = 0.002` (~-80 dBFS), `prepareToPlay()`, `play()`.
-    private func ensurePlaying() {
+    ///    - Automatically falls back to `[.mixWithOthers]` if NonMixable activation fails in background
+    ///      (e.g. iOS 26 `audiomxd` error `-12985`: "Operation denied. Cannot interrupt others").
+    /// 3. Load `silent.wav` (16Hz, -57.2 dBFS, rms=31.8 LSB) at `volume = 1.0`, `numberOfLoops = -1`.
+    private func ensurePlaying(forceMixable: Bool = false) {
         guard wanted, !interrupted else { return }
 
         if let p = audioPlayer, p.isPlaying {
@@ -537,16 +548,33 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
 
         let session = AVAudioSession.sharedInstance()
-        let options: AVAudioSession.CategoryOptions = isExclusiveAudioMode ? [] : [.mixWithOthers]
+        let useMixable = forceMixable || !isExclusiveAudioMode
+        let options: AVAudioSession.CategoryOptions = useMixable ? [.mixWithOthers] : []
         do {
             try session.setCategory(.playback, mode: .default, options: options)
             try session.setActive(true)
         } catch {
-            let nsErr = error as NSError
-            lastAudioError = "sess(\(nsErr.code)): \(nsErr.localizedDescription)"
-            audioStatus = "error(\(nsErr.code))"
-            print("[BackgroundAudio] AVAudioSession error: \(error)")
-            return
+            if !useMixable {
+                // NonMixable failed (e.g. -12985 when YouTube/TikTok/Facebook is active in foreground).
+                // Immediately fall back to [.mixWithOthers] so audiomxd grants isPlayingProcessAssertion
+                // without interrupting the foreground app!
+                do {
+                    try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+                    try session.setActive(true)
+                } catch let fallbackError {
+                    let nsErr = fallbackError as NSError
+                    lastAudioError = "sess(\(nsErr.code)): \(nsErr.localizedDescription)"
+                    audioStatus = "error(\(nsErr.code))"
+                    print("[BackgroundAudio] AVAudioSession mixable fallback error: \(fallbackError)")
+                    return
+                }
+            } else {
+                let nsErr = error as NSError
+                lastAudioError = "sess(\(nsErr.code)): \(nsErr.localizedDescription)"
+                audioStatus = "error(\(nsErr.code))"
+                print("[BackgroundAudio] AVAudioSession error: \(error)")
+                return
+            }
         }
 
         if audioPlayer == nil {
@@ -816,14 +844,25 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                 self.interrupted = true
                 self.interruptedAt = Date()
                 self.audioStatus = "interrupted"
+                // audiomxd only grants ~5.0s via CMSMSleep_ExtendPlaybackProcessAssertion before
+                // suspending the app. In background, attempt a fast Mixable recovery at +0.8s so
+                // opening YouTube/TikTok/Facebook never suspends the J2ME process.
+                if self.isInBackground {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                        guard let self = self, self.wanted, self.isInBackground, !self.isAudioPlaying else { return }
+                        self.interrupted = false
+                        self.interruptedAt = nil
+                        self.ensurePlaying(forceMixable: true)
+                    }
+                }
             case .ended:
                 self.interrupted = false
                 self.interruptedAt = nil
-                self.ensurePlaying()
+                self.ensurePlaying(forceMixable: self.isInBackground)
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
                     guard let self = self, self.wanted, !self.isAudioPlaying else { return }
                     self.interrupted = false
-                    self.ensurePlaying()
+                    self.ensurePlaying(forceMixable: self.isInBackground)
                 }
             @unknown default:
                 break

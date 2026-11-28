@@ -384,8 +384,8 @@ class AppsListViewController: UIViewController,
         })
         alert.addAction(UIAlertAction(
             title: isExclusive
-                ? "Chuyển Audio Mix app khác (Nghe TikTok/YouTube)"
-                : "Bật Audio Độc quyền (Khóa cứng chống tắt màn tối đa)",
+                ? "Chuyển Audio Mix app khác (Khuyên dùng)"
+                : "Bật Audio Độc quyền (Tự chuyển Mix khi mở app khác)",
             style: .default
         ) { _ in
             keeper.setExclusiveAudioMode(!isExclusive)

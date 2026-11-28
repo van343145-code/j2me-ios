@@ -15,9 +15,6 @@ final class TuoiThoPopupMenuView: UIView {
     var onOpenProxySettings: (() -> Void)?
     var onCleanRam: (() -> Void)?
     var onOpenKeyboardSettings: (() -> Void)?
-    var onArrangeKeyboard: (() -> Void)?
-    var onToggleKeyboardVisibility: (() -> Void)?
-    var onOpenNativeKeyboard: (() -> Void)?
     var onToggleSplitView: (() -> Void)?
     var onOledSleepMode: (() -> Void)?
     var onToggleTreo247: (() -> Void)?
@@ -33,19 +30,12 @@ final class TuoiThoPopupMenuView: UIView {
     private let contentStack = UIStackView()
     private var isDismissing = false
 
-    var isKeypadHidden: Bool = false {
-        didSet {
-            updateHideKeypadLabel()
-        }
-    }
-
     var isTreo247Active: Bool = DecadeBackgroundKeeper.shared.isTreoActive {
         didSet {
             updateTreo247Appearance()
         }
     }
 
-    private var hideKeypadBtn: UIButton?
     private var treo247Btn: UIButton?
 
     override init(frame: CGRect) {
@@ -160,42 +150,14 @@ final class TuoiThoPopupMenuView: UIView {
         )
         contentStack.addArrangedSubview(btnCleanRam)
 
-        // 2. Cài Đặt Bàn Phím (Keyboard+gear icon xanh)
+        // 2. Setup Bàn Phím (Gộp 1 màn hình duy nhất: Kiểu · Ẩn/Hiện · Cỡ · Độ mờ · Sắp xếp · Thêm/Xóa phím · QWERTY)
         let btnKbSettings = makeMenuItem(
             iconName: "keyboard.fill",
             iconColor: UIColor(red: 0.18, green: 0.58, blue: 0.28, alpha: 1.0), // Green #2E7D32
-            title: "Cài Đặt Bàn Phím",
+            title: "Setup Bàn Phím",
             action: #selector(handleKbSettings)
         )
         contentStack.addArrangedSubview(btnKbSettings)
-
-        // 3. Sắp Xếp Bàn Phím (4-way move icon xanh)
-        let btnArrange = makeMenuItem(
-            iconName: "arrow.up.and.down.and.arrow.left.and.right",
-            iconColor: UIColor(red: 0.18, green: 0.58, blue: 0.28, alpha: 1.0),
-            title: "Sắp Xếp Bàn Phím",
-            action: #selector(handleArrange)
-        )
-        contentStack.addArrangedSubview(btnArrange)
-
-        // 4. Ẩn Bàn Phím (Keyboard icon xanh)
-        let btnHideKb = makeMenuItem(
-            iconName: "keyboard",
-            iconColor: UIColor(red: 0.18, green: 0.58, blue: 0.28, alpha: 1.0),
-            title: isKeypadHidden ? "Hiện Bàn Phím" : "Ẩn Bàn Phím",
-            action: #selector(handleToggleHideKb)
-        )
-        self.hideKeypadBtn = btnHideKb
-        contentStack.addArrangedSubview(btnHideKb)
-
-        // 4b. Bàn Phím Gốc QWERTY (Keyboard icon xanh dương - hiện bàn phím iPhone gốc)
-        let btnNativeKb = makeMenuItem(
-            iconName: "keyboard.badge.ellipsis",
-            iconColor: UIColor(red: 0.12, green: 0.58, blue: 0.95, alpha: 1.0),
-            title: "Bàn Phím Gốc QWERTY",
-            action: #selector(handleNativeKb)
-        )
-        contentStack.addArrangedSubview(btnNativeKb)
 
         // 4c. Chia Màn Hình / Split View (Rectangle split icon xanh dương)
         let btnSplit = makeMenuItem(
@@ -331,15 +293,6 @@ final class TuoiThoPopupMenuView: UIView {
         return line
     }
 
-    private func updateHideKeypadLabel() {
-        guard let btn = hideKeypadBtn else { return }
-        for sub in btn.subviews {
-            if let lbl = sub as? UILabel {
-                lbl.text = isKeypadHidden ? "Hiện Bàn Phím" : "Ẩn Bàn Phím"
-            }
-        }
-    }
-
     private func updateTreo247Appearance() {
         guard let btn = treo247Btn else { return }
         for sub in btn.subviews {
@@ -402,18 +355,6 @@ final class TuoiThoPopupMenuView: UIView {
         }
     }
 
-    @objc private func handleArrange() {
-        dismissMenu { [weak self] in
-            self?.onArrangeKeyboard?()
-        }
-    }
-
-    @objc private func handleToggleHideKb() {
-        dismissMenu { [weak self] in
-            self?.onToggleKeyboardVisibility?()
-        }
-    }
-
     @objc private func handleToggleSplitView() {
         dismissMenu { [weak self] in
             self?.onToggleSplitView?()
@@ -447,12 +388,6 @@ final class TuoiThoPopupMenuView: UIView {
     @objc private func handleRestart() {
         dismissMenu { [weak self] in
             self?.onRestartGame?()
-        }
-    }
-
-    @objc private func handleNativeKb() {
-        dismissMenu { [weak self] in
-            self?.onOpenNativeKeyboard?()
         }
     }
 

@@ -726,35 +726,30 @@ class DecadeConfigViewController: UIViewController {
     }
 
     @objc private func keyboardSettingsTapped() {
-        let alert = UIAlertController(title: "Cài Đặt Bàn Phím", message: "Chọn kiểu cấu trúc bàn phím ảo hiển thị:", preferredStyle: .actionSheet)
+        let setupVC = DecadeKeyboardSetupViewController(
+            gameId: gid,
+            inGame: false,
+            onChanged: { [weak self] in
+                self?.refreshKeyboardStatusLabel()
+                self?.saveValues()
+            }
+        )
+        let nav = UINavigationController(rootViewController: setupVC)
+        nav.modalPresentationStyle = .pageSheet
+        present(nav, animated: true)
+    }
 
-        alert.addAction(UIAlertAction(title: "⭐️ Bản Tuổi Thơ (Chuẩn Mới)", style: .default) { [weak self] _ in
-            self?.applyKeyboardLayout(0)
-        })
-        alert.addAction(UIAlertAction(title: "🎯 Chỉ Mũi Tên Điều Hướng", style: .default) { [weak self] _ in
-            self?.applyKeyboardLayout(1)
-        })
-        alert.addAction(UIAlertAction(title: "🔢 Bàn Phím Số (Numpad)", style: .default) { [weak self] _ in
-            self?.applyKeyboardLayout(2)
-        })
-        alert.addAction(UIAlertAction(title: "🔄 Kết Hợp Đầy Đủ", style: .default) { [weak self] _ in
-            self?.applyKeyboardLayout(3)
-        })
-        alert.addAction(UIAlertAction(title: "Ẩn / Hiện Bàn Phím", style: .default) { [weak self] _ in
-            guard let self = self else { return }
-            let isHidden = UserDefaults.standard.bool(forKey: "keypad_hidden_\(self.gid)")
-            UserDefaults.standard.set(!isHidden, forKey: "keypad_hidden_\(self.gid)")
-            self.keyboardStatusLabel.text = !isHidden ? "Đang Ẩn" : "Đang Hiện"
-            self.saveValues()
-        })
-        alert.addAction(UIAlertAction(title: "Đóng", style: .cancel))
-        if let popover = alert.popoverPresentationController {
-            popover.sourceView = view
-            popover.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
-            popover.permittedArrowDirections = []
+    private func refreshKeyboardStatusLabel() {
+        let d = UserDefaults.standard
+        let isKbHidden = d.bool(forKey: "keypad_hidden_\(gid)")
+        if isKbHidden {
+            keyboardStatusLabel.text = "Đang Ẩn"
+            return
         }
-
-        present(alert, animated: true)
+        let layoutNames = ["Tuổi Thơ", "Mũi Tên", "Số (Numpad)", "Kết Hợp"]
+        let idx = d.object(forKey: "keypad_layout_\(gid)") as? Int ?? 0
+        let layoutLabel = (idx >= 0 && idx < layoutNames.count) ? layoutNames[idx] : "Tuổi Thơ"
+        keyboardStatusLabel.text = "Đang Hiện · \(layoutLabel)"
     }
 
     @objc private func proxySettingsTapped() {
@@ -769,6 +764,7 @@ class DecadeConfigViewController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         refreshProxyStatusLabel()
+        refreshKeyboardStatusLabel()
     }
 
     private func refreshProxyStatusLabel() {
@@ -781,11 +777,6 @@ class DecadeConfigViewController: UIViewController {
         } else {
             proxyStatusLabel.text = "Chưa cấu hình (Nhấn để thêm)"
         }
-    }
-
-    private func applyKeyboardLayout(_ layout: Int) {
-        UserDefaults.standard.set(layout, forKey: "keypad_layout_\(gid)")
-        saveValues()
     }
 
     // ============================================================
@@ -861,8 +852,7 @@ class DecadeConfigViewController: UIViewController {
         soundSwitch.isOn = defaults.object(forKey: "decade_game_sound") as? Bool ?? true
 
         // Keyboard status
-        let isKbHidden = defaults.bool(forKey: "keypad_hidden_\(gid)")
-        keyboardStatusLabel.text = isKbHidden ? "Đang Ẩn" : "Đang Hiện"
+        refreshKeyboardStatusLabel()
     }
 
     private func saveValues() {

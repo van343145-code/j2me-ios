@@ -101,20 +101,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.14-jarNO1
-          name: "jarNO1 iOS v1.0.14 (512MB Heap, x24 Multi-Tab RAM & CPU Engine kiểu NST)"
+          tag_name: v1.0.15-jarNO1
+          name: "jarNO1 iOS v1.0.15 (Gộp Setup Bàn Phím Tất-Cả-Trong-1 + Động cơ x24 512MB)"
           body: |
-            ## jarNO1 iOS v1.0.14 — Nâng Cấp Động Cơ Đa Tab (x24) & Giới Hạn 512MB Kiểu J2ME NST
-            - **Thứ 1 — Nâng trần heap lên 512 MB & Fix lỗi GC toàn cục (`jvm_bridge.c`, `garbage.c`, `jvm.h`)**:
-              - Nâng `max_heap_size` lên **`512 MB` (`536870912` bytes)** giống `LangNatives.MaxMemory` của J2ME NST.
-              - Sửa lỗi nghiêm trọng `g_native_extra_heap` toàn cục làm cả 24 tab bị kích hoạt Stop-The-World GC liên tục cùng lúc -> chuyển sang đếm `native_heap_size` độc lập theo từng `MiniJVM`.
-              - Thêm **Soft-GC thông minh cho tab ẩn** (giữ live heap mỗi tab ẩn nhỏ + bỏ qua chu kỳ GC khi rác mới < 2MB + gọi `malloc_zone_pressure_relief` trả page về nhân iOS ngay).
-            - **Thứ 2 — Giảm mạnh RAM mỗi tab (`j2me_render.m`, `Canvas.java`, `GameViewController.swift`, `miniz_wrapper.c`)**:
-              - **Share ảnh sprite PNG bất biến qua SHA-256 giữa tất cả các tab** + bỏ giữ bản sao `img->ctx` thứ 2 -> cắt mạnh RAM ảnh khi treo x24 và bỏ giới hạn mảng cứng `TRACK_MAX = 8192`.
-              - Tự động xả `Canvas` offscreen `RenderContext` của tab đang ẩn (tạo lại tức thì khi chạm tab) và xả `slotFrames` thừa ngoài split-view.
-              - Dùng chung `mmap` read-only cache cho `.jar` trong `miniz_wrapper.c` thay vì mở/parse zip lại từ đầu ở mỗi tab.
-            - **Thứ 3 — Tiết kiệm CPU cho treo x24 (`Canvas.java`, `Display.java`, `interpreter.c`, `j2me_input.c`, `project.pbxproj`)**:
-              - Bỏ check `jdwp_client_count` trên từng lệnh bytecode khi không debug + bật `GCC_OPTIMIZATION_LEVEL = 3` cho bản `Release`.
-              - Điều phối wake per-slot trong `j2me_input.c`, tăng ngủ nhàn rỗi `Display.runEventLoop` ở tab ẩn lên `1000ms`, và tự động hạ nhịp vẽ nền theo số tab (`10 FPS` -> `5 FPS` -> `3-4 FPS` ở x12-x24).
+            ## jarNO1 iOS v1.0.15 — Gộp Toàn Bộ Setup Bàn Phím Thành 1 & Nền Tảng x24 512MB
+            - **Gộp toàn bộ chức năng Setup Bàn Phím về 1 nơi duy nhất (`DecadeKeyboardSetupViewController`, `TuoiThoPopupMenuView`, `GameViewController`, `DecadeConfigViewController`)**:
+              - Rút gọn menu `[⋮]` từ 4 dòng bàn phím rời rạc xuống còn **1 mục duy nhất: `Setup Bàn Phím`**.
+              - Xóa bỏ 6 hộp thoại/menu chồng chéo cũ; mở **1 bảng Setup Bàn Phím tổng hợp** (từ `[⋮] -> Setup Bàn Phím`, nhấn giữ `[🎮]`, hoặc từ `Cài Đặt Game -> Cài Đặt Bàn Phím`) gồm đầy đủ ngay trên 1 màn hình:
+                1. Bật / Tắt bàn phím ảo
+                2. Chọn kiểu bố cục (`Tuổi Thơ`, `Mũi Tên`, `Số`, `Kết Hợp`)
+                3. Chọn chiều cao (`Nhỏ / Vừa / Chuẩn / Lớn`) & độ mờ (`40% / 70% / 100%`)
+                4. Kéo thả di chuyển phím · Thu phóng 2 ngón · Khôi phục mặc định · Mở bàn phím gõ chữ QWERTY / IME
+                5. Tích chọn Ẩn / Hiện từng phím cụ thể (`1–9`, `*`, `#`, `Del`, `L`, `R`, `OK`, `↑ ↓ ← →`...)
+            - Giữ trọn toàn bộ tối ưu x24 & 512 MB từ `v1.0.14` (fix `g_native_extra_heap`, share sprite SHA-256, `mmap` JAR cache, xả `RenderContext` tab ẩn, Soft-GC & `-O3`).
           files: |
             jarNO1.ipa

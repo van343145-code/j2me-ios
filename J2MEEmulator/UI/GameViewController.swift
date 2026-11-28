@@ -404,6 +404,10 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         if savedKbHidden {
             isKeypadHidden = true
         }
+        let savedKpH = UserDefaults.standard.double(forKey: "keypad_height_\(currentGameId)")
+        if savedKpH >= 150 {
+            keypadCurrentHeight = CGFloat(savedKpH)
+        }
 
         let effSize = DecadeScreenSizeEditor.effectiveSize(forGameId: currentGameId) {
             calculateAutoCanvasSize()
@@ -653,11 +657,13 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         nativeKeyboardBtn.tintColor = UIColor(white: 0.90, alpha: 1.0)
         nativeKeyboardBtn.addTarget(self, action: #selector(nativeKeyboardTapped), for: .touchUpInside)
 
-        // [🎮] Game Controller Button (toggle virtual keypad/keyboard)
+        // [🎮] Game Controller Button (1 chạm = Ẩn/Hiện nhanh, nhấn giữ = Mở Setup Bàn Phím)
         let gamePadConfig = UIImage.SymbolConfiguration(pointSize: 18, weight: .medium)
         keyboardBtn.setImage(UIImage(systemName: "gamecontroller.fill", withConfiguration: gamePadConfig), for: .normal)
         keyboardBtn.tintColor = UIColor(white: 0.90, alpha: 1.0)
         keyboardBtn.addTarget(self, action: #selector(toggleKeypadVisibility), for: .touchUpInside)
+        let kpLongPress = UILongPressGestureRecognizer(target: self, action: #selector(keyboardLongPressed(_:)))
+        keyboardBtn.addGestureRecognizer(kpLongPress)
 
         actionStack.addArrangedSubview(menuBtn)
         actionStack.addArrangedSubview(removeTabBtn)
@@ -702,7 +708,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         let savedAlpha = (UserDefaults.standard.object(forKey: "keypad_alpha_\(gid)") as? Float)
             ?? (UserDefaults.standard.object(forKey: "keypad_alpha_\(legGid)") as? Float)
             ?? 255.0
-        keypad.keypadAlphaValue = (keypad.currentLayout == .tuoitho) ? 1.0 : max(0.35, CGFloat(savedAlpha / 255.0))
+        keypad.keypadAlphaValue = max(0.35, CGFloat(savedAlpha / 255.0))
 
         keypad.translatesAutoresizingMaskIntoConstraints = false
         keypad.loadHiddenKeys()
@@ -999,19 +1005,8 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         let targetBtn = tabButtons[index]
         tabScrollView.scrollRectToVisible(targetBtn.frame, animated: true)
 
-        if let keypad = decadeKeypadView {
-            keypad.gameId = currentGameId
-            let defaults = UserDefaults.standard
-            let savedLayout = defaults.object(forKey: "keypad_layout_\(currentGameId)") as? Int
-                ?? defaults.object(forKey: "keypad_layout_\(legacyGameId)") as? Int ?? 0
-            keypad.currentLayout = DecadeKeypadLayout(rawValue: savedLayout) ?? .tuoitho
-            isKeypadHidden = defaults.bool(forKey: "keypad_hidden_\(currentGameId)")
-            let hidden = isForceFullscreenEnabled || isKeypadHidden
-            keypad.isHidden = hidden
-            floatingShowKeypadBtn.isHidden = isForceFullscreenEnabled || !isKeypadHidden
-            keypadHeightConstraint?.constant = hidden ? 0 : keypadCurrentHeight
-            keypad.loadHiddenKeys()
-            keypad.updateKeysVisibility()
+        if decadeKeypadView != nil {
+            applySavedKeyboardPreferences()
         }
 
         j2me_ui_restore_focused_screen()
@@ -1373,7 +1368,6 @@ class GameViewController: UIViewController, UITextFieldDelegate {
     @objc private func showMenu() {
         softKeyHaptic.impactOccurred(intensity: 0.6)
         let popup = TuoiThoPopupMenuView()
-        popup.isKeypadHidden = self.isKeypadHidden
         popup.isTreo247Active = DecadeBackgroundKeeper.shared.isTreoActive
 
         popup.onOpenGameSettings = { [weak self] in
@@ -1389,14 +1383,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
             self?.triggerManualRamCleanup()
         }
         popup.onOpenKeyboardSettings = { [weak self] in
-            self?.promptChangeKeyboardLayout()
-        }
-        popup.onArrangeKeyboard = { [weak self] in
-            self?.decadeKeypadView?.toggleEditMode()
-            self?.showToast(message: "Kéo thả để sắp xếp các phím ảo")
-        }
-        popup.onToggleKeyboardVisibility = { [weak self] in
-            self?.toggleKeypadVisibility()
+            self?.openKeyboardSetup()
         }
         popup.onToggleSplitView = { [weak self] in
             self?.toggleSplitView()
@@ -1413,9 +1400,6 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         popup.onHideApp = { [weak self] in
             self?.hideAppToBackground()
         }
-        popup.onOpenNativeKeyboard = { [weak self] in
-            self?.nativeKeyboardTapped()
-        }
         popup.onRestartGame = { [weak self] in
             self?.restartGameSession()
         }
@@ -1429,59 +1413,84 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         popup.show(in: view)
     }
 
-    private func showHideKeysDialog() {
-        guard let keypad = self.decadeKeypadView else { return }
-        let gid = self.currentGameId
-        let dialog = DecadeHideButtonsDialog(gameId: gid, currentHiddenKeys: keypad.hiddenKeys) { [weak self] newHiddenKeys in
-            keypad.hiddenKeys = newHiddenKeys
-            keypad.saveHiddenKeys()
-            self?.showToast(message: "Đã cập nhật hiển thị nút bàn phím")
+    private func applySavedKeyboardPreferences() {
+        let d = UserDefaults.standard
+        let gid = currentGameId
+        let legGid = legacyGameId
+
+        let savedLayout = (d.object(forKey: "keypad_layout_\(gid)") as? Int)
+            ?? (d.object(forKey: "keypad_layout_\(legGid)") as? Int)
+            ?? 0
+        if let kp = decadeKeypadView {
+            kp.gameId = gid
+            kp.currentLayout = DecadeKeypadLayout(rawValue: savedLayout) ?? .tuoitho
+            let savedAlpha = (d.object(forKey: "keypad_alpha_\(gid)") as? Float)
+                ?? (d.object(forKey: "keypad_alpha_\(legGid)") as? Float)
+                ?? 255.0
+            kp.keypadAlphaValue = max(0.35, CGFloat(savedAlpha / 255.0))
+            kp.loadHiddenKeys()
+            kp.updateKeysVisibility()
         }
-        self.present(dialog, animated: true)
+
+        let savedH = d.double(forKey: "keypad_height_\(gid)")
+        if savedH >= 150 {
+            keypadCurrentHeight = CGFloat(savedH)
+        }
+
+        isKeypadHidden = isForceFullscreenEnabled || d.bool(forKey: "keypad_hidden_\(gid)")
+        let effectiveHidden = isForceFullscreenEnabled || isKeypadHidden
+        decadeKeypadView?.isHidden = effectiveHidden
+        floatingShowKeypadBtn.isHidden = isForceFullscreenEnabled || !isKeypadHidden
+        keypadHeightConstraint?.constant = effectiveHidden ? 0 : keypadCurrentHeight
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
     }
 
-    private func promptChangeKeyboardLayout() {
-        let alert = UIAlertController(title: "Cài Đặt Bàn Phím", message: "Chọn kiểu bàn phím hoặc chỉnh sửa phím ảo:", preferredStyle: .actionSheet)
-        alert.addAction(UIAlertAction(title: "⭐️ Bản Tuổi Thơ (Chuẩn Mới)", style: .default) { [weak self] _ in
-            guard let self = self else { return }
-            self.decadeKeypadView?.currentLayout = .tuoitho
-            UserDefaults.standard.set(0, forKey: "keypad_layout_\(self.currentGameId)")
-            self.showToast(message: "Đã chọn Bàn phím Tuổi Thơ")
-        })
-        alert.addAction(UIAlertAction(title: "🎯 Chỉ Mũi Tên Điều Hướng", style: .default) { [weak self] _ in
-            guard let self = self else { return }
-            self.decadeKeypadView?.currentLayout = .arrows
-            UserDefaults.standard.set(1, forKey: "keypad_layout_\(self.currentGameId)")
-            self.showToast(message: "Đã chọn Bàn phím Mũi Tên")
-        })
-        alert.addAction(UIAlertAction(title: "🔢 Bàn Phím Số (Numpad)", style: .default) { [weak self] _ in
-            guard let self = self else { return }
-            self.decadeKeypadView?.currentLayout = .numpad
-            UserDefaults.standard.set(2, forKey: "keypad_layout_\(self.currentGameId)")
-            self.showToast(message: "Đã chọn Bàn phím Số")
-        })
-        alert.addAction(UIAlertAction(title: "🔄 Kết Hợp Đầy Đủ", style: .default) { [weak self] _ in
-            guard let self = self else { return }
-            self.decadeKeypadView?.currentLayout = .combined
-            UserDefaults.standard.set(3, forKey: "keypad_layout_\(self.currentGameId)")
-            self.showToast(message: "Đã chọn Bàn phím Kết Hợp")
-        })
-        alert.addAction(UIAlertAction(title: "👁️ Thêm / Xoá Nút Phím Số (1, 2, 3...)", style: .default) { [weak self] _ in
-            self?.showHideKeysDialog()
-        })
-        alert.addAction(UIAlertAction(title: "⌨ Bật Bàn Phím Gốc QWERTY (Gõ Chữ / Chat)", style: .default) { [weak self] _ in
-            self?.nativeKeyboardTapped()
-        })
-        alert.addAction(UIAlertAction(title: "✥ Di Chuyển Phím Bấm (Kéo Thả Tự Do)", style: .default) { [weak self] _ in
-            self?.decadeKeypadView?.toggleEditMode()
-            self?.showToast(message: "Kéo thả các phím để sắp xếp vị trí mong muốn")
-        })
-        alert.addAction(UIAlertAction(title: "Đóng", style: .cancel))
-        if let popover = alert.popoverPresentationController {
-            popover.sourceView = menuBtn
-            popover.sourceRect = menuBtn.bounds
-        }
-        present(alert, animated: true)
+    private func openKeyboardSetup() {
+        let setupVC = DecadeKeyboardSetupViewController(
+            gameId: currentGameId,
+            legacyGameId: legacyGameId,
+            inGame: true,
+            isCurrentlyEditing: decadeKeypadView?.isEditLayoutMode ?? false,
+            isCurrentlyResizing: decadeKeypadView?.isResizeLayoutMode ?? false,
+            onChanged: { [weak self] in
+                self?.applySavedKeyboardPreferences()
+            },
+            onAction: { [weak self] action in
+                guard let self = self else { return }
+                switch action {
+                case .arrangeKeys:
+                    if self.isKeypadHidden {
+                        UserDefaults.standard.set(false, forKey: "keypad_hidden_\(self.currentGameId)")
+                        self.applySavedKeyboardPreferences()
+                    }
+                    self.decadeKeypadView?.isEditLayoutMode = true
+                    self.decadeKeypadView?.isResizeLayoutMode = false
+                    self.showToast(message: "Kéo thả từng phím để sắp xếp (nhấn giữ [🎮] để lưu/tắt)")
+                case .resizeKeys:
+                    if self.isKeypadHidden {
+                        UserDefaults.standard.set(false, forKey: "keypad_hidden_\(self.currentGameId)")
+                        self.applySavedKeyboardPreferences()
+                    }
+                    self.decadeKeypadView?.isResizeLayoutMode = true
+                    self.decadeKeypadView?.isEditLayoutMode = false
+                    self.showToast(message: "Dùng 2 ngón thu phóng cỡ từng phím (nhấn giữ [🎮] để lưu/tắt)")
+                case .finishEditing:
+                    self.decadeKeypadView?.finishEditingLayout()
+                    self.showToast(message: "Đã lưu vị trí & kích thước phím")
+                case .resetPositions:
+                    self.decadeKeypadView?.resetCustomLayout()
+                    self.showToast(message: "Đã khôi phục vị trí phím mặc định")
+                case .openNativeTextKeyboard:
+                    self.nativeKeyboardTapped()
+                case .openTextInputDialog:
+                    self.promptTextInput()
+                }
+            }
+        )
+        let nav = UINavigationController(rootViewController: setupVC)
+        nav.modalPresentationStyle = .pageSheet
+        present(nav, animated: true)
     }
 
     private func restartGameSession() {
@@ -1674,10 +1683,6 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         let isForceFill = isForceFullscreen || !isAspectFitEnabled
         emulatorView.isAspectFit = !isForceFill
 
-        let savedLayout = (UserDefaults.standard.object(forKey: "keypad_layout_\(currentGameId)") as? Int) ??
-                          (UserDefaults.standard.object(forKey: "keypad_layout_\(legacyGameId)") as? Int) ?? 0
-        decadeKeypadView?.currentLayout = DecadeKeypadLayout(rawValue: savedLayout) ?? .tuoitho
-
         if let treo = notif.userInfo?["treo"] as? Bool {
             DecadeBackgroundKeeper.shared.setTreoActive(treo)
         }
@@ -1685,22 +1690,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
             j2me_render_set_fps_limit(Int32(fps))
         }
 
-        let savedAlpha = (UserDefaults.standard.object(forKey: "keypad_alpha_\(currentGameId)") as? Float) ??
-                         (UserDefaults.standard.object(forKey: "keypad_alpha_\(legacyGameId)") as? Float) ?? 255.0
-        if let kp = decadeKeypadView {
-            kp.keypadAlphaValue = (kp.currentLayout == .tuoitho) ? 1.0 : max(0.35, CGFloat(savedAlpha / 255.0))
-        }
-
-        let savedKbHidden = UserDefaults.standard.bool(forKey: "keypad_hidden_\(currentGameId)")
-        if isForceFullscreen || savedKbHidden {
-            isKeypadHidden = true
-            decadeKeypadView?.isHidden = true
-            floatingShowKeypadBtn.isHidden = isForceFullscreen
-            keypadHeightConstraint?.constant = 0
-        } else {
-            isKeypadHidden = false
-            updateKeypadVisibility()
-        }
+        applySavedKeyboardPreferences()
 
         view.setNeedsLayout()
         view.layoutIfNeeded()
@@ -1955,302 +1945,31 @@ class GameViewController: UIViewController, UITextFieldDelegate {
     }
 
     // ============================================================
-    // MARK: - Menu Bàn phím ảo cốt lõi của Decade
+    // MARK: - Unified Keyboard Controls (Decade)
     // ============================================================
-
-    @objc private func keyboardButtonTapped() {
-        showVirtualKeyboardMenu()
-    }
 
     @objc private func keyboardLongPressed(_ gesture: UILongPressGestureRecognizer) {
         if gesture.state == .began {
-            promptTextInput()
+            softKeyHaptic.impactOccurred(intensity: 0.7)
+            openKeyboardSetup()
         }
-    }
-
-    private func buildVirtualKeyboardMenu() -> UIMenu {
-        let toggleKeypadItem = UIAction(
-            title: isKeypadHidden ? "Bàn phím ảo (Đang tắt)" : "Bàn phím ảo (Đang bật)",
-            image: UIImage(systemName: isKeypadHidden ? "keyboard" : "keyboard.fill"),
-            state: isKeypadHidden ? .off : .on
-        ) { [weak self] _ in
-            self?.toggleKeypadVisibility()
-        }
-
-        let editLayoutItem = UIAction(
-            title: "Chế độ chỉnh sửa cấu trúc phím",
-            image: UIImage(systemName: "arrow.up.and.down.and.arrow.left.and.right")
-        ) { [weak self] _ in
-            guard let self = self, let keypad = self.decadeKeypadView else { return }
-            if self.isKeypadHidden {
-                self.isKeypadHidden = false
-                self.updateKeypadVisibility()
-            }
-            keypad.isEditLayoutMode = true
-            keypad.isResizeLayoutMode = false
-            self.showToast(message: "Chế độ chỉnh sửa: Kéo thả các phím tự do")
-        }
-
-        let scaleLayoutItem = UIAction(
-            title: "Chế độ thay đổi kích cỡ cấu trúc phím",
-            image: UIImage(systemName: "arrow.up.left.and.arrow.down.right")
-        ) { [weak self] _ in
-            guard let self = self, let keypad = self.decadeKeypadView else { return }
-            if self.isKeypadHidden {
-                self.isKeypadHidden = false
-                self.updateKeypadVisibility()
-            }
-            keypad.isResizeLayoutMode = true
-            keypad.isEditLayoutMode = false
-            self.showToast(message: "Chế độ thay đổi kích cỡ: Dùng 2 ngón tay thu phóng phím")
-        }
-
-        let finishEditItem = UIAction(
-            title: "Hoàn thành chế độ chỉnh sửa",
-            image: UIImage(systemName: "checkmark.circle.fill")
-        ) { [weak self] _ in
-            guard let self = self, let keypad = self.decadeKeypadView else { return }
-            keypad.finishEditingLayout()
-            self.showToast(message: "Đã hoàn tất chế độ chỉnh sửa")
-        }
-
-        let switchLayoutItem = UIAction(
-            title: "Công tắc cấu trúc phím",
-            image: UIImage(systemName: "square.grid.3x3")
-        ) { [weak self] _ in
-            self?.showLayoutSwitchDialog()
-        }
-
-        let hideButtonsItem = UIAction(
-            title: "👁️ Thêm / Xoá Nút Phím Số (1, 2, 3...)",
-            image: UIImage(systemName: "eye.slash")
-        ) { [weak self] _ in
-            self?.showHideKeysDialog()
-        }
-
-        let textInputItem = UIAction(
-            title: "Nhập văn bản (IME)",
-            image: UIImage(systemName: "character.cursor.ibeam")
-        ) { [weak self] _ in
-            self?.promptTextInput()
-        }
-
-        let splitTabItem = UIAction(
-            title: isSplitViewEnabled ? "⧉ Tắt chia màn hình" : "⧉ Chia màn hình đa game",
-            image: UIImage(systemName: "rectangle.split.2x1")
-        ) { [weak self] _ in
-            self?.toggleSplitView()
-        }
-
-        return UIMenu(
-            title: "Bàn phím ảo",
-            children: [
-                toggleKeypadItem,
-                splitTabItem,
-                editLayoutItem,
-                scaleLayoutItem,
-                finishEditItem,
-                switchLayoutItem,
-                hideButtonsItem,
-                textInputItem
-            ]
-        )
-    }
-
-    private func showVirtualKeyboardMenu() {
-        let alert = UIAlertController(title: "Bàn phím ảo", message: nil, preferredStyle: .actionSheet)
-
-        // 1. Bàn phím ảo
-        let hideTitle = isKeypadHidden ? "Bàn phím ảo (Đang tắt)" : "Bàn phím ảo (Đang bật)"
-        alert.addAction(UIAlertAction(title: hideTitle, style: .default) { [weak self] _ in
-            self?.toggleKeypadVisibility()
-        })
-
-        // 1c. Chia màn hình đa game
-        let splitTitle = isSplitViewEnabled ? "⧉ Tắt chia màn hình" : "⧉ Chia màn hình đa game"
-        alert.addAction(UIAlertAction(title: splitTitle, style: .default) { [weak self] _ in
-            self?.toggleSplitView()
-        })
-
-        // 2. Chế độ chỉnh sửa cấu trúc phím
-        alert.addAction(UIAlertAction(title: "Chế độ chỉnh sửa cấu trúc phím", style: .default) { [weak self] _ in
-            guard let self = self, let keypad = self.decadeKeypadView else { return }
-            if self.isKeypadHidden {
-                self.isKeypadHidden = false
-                self.updateKeypadVisibility()
-            }
-            keypad.isEditLayoutMode = true
-            keypad.isResizeLayoutMode = false
-            self.showToast(message: "Chế độ chỉnh sửa: Kéo thả các phím tự do")
-        })
-
-        // 3. Chế độ thay đổi kích cỡ cấu trúc phím
-        alert.addAction(UIAlertAction(title: "Chế độ thay đổi kích cỡ cấu trúc phím", style: .default) { [weak self] _ in
-            guard let self = self, let keypad = self.decadeKeypadView else { return }
-            if self.isKeypadHidden {
-                self.isKeypadHidden = false
-                self.updateKeypadVisibility()
-            }
-            keypad.isResizeLayoutMode = true
-            keypad.isEditLayoutMode = false
-            self.showToast(message: "Chế độ thay đổi kích cỡ: Dùng 2 ngón tay thu phóng phím")
-        })
-
-        // 4. Hoàn thành chế độ chỉnh sửa
-        alert.addAction(UIAlertAction(title: "Hoàn thành chế độ chỉnh sửa", style: .default) { [weak self] _ in
-            guard let self = self, let keypad = self.decadeKeypadView else { return }
-            keypad.finishEditingLayout()
-            self.showToast(message: "Đã hoàn tất chế độ chỉnh sửa")
-        })
-
-        // 5. Công tắc cấu trúc phím
-        alert.addAction(UIAlertAction(title: "Công tắc cấu trúc phím", style: .default) { [weak self] _ in
-            self?.showLayoutSwitchDialog()
-        })
-
-        // 6. Thêm / Xóa nút phím số
-        alert.addAction(UIAlertAction(title: "👁️ Thêm / Xoá Nút Phím Số (1, 2, 3...)", style: .default) { [weak self] _ in
-            self?.showHideKeysDialog()
-        })
-
-        // 7. Nhập văn bản (IME)
-        alert.addAction(UIAlertAction(title: "Nhập văn bản (IME)", style: .default) { [weak self] _ in
-            self?.promptTextInput()
-        })
-
-        alert.addAction(UIAlertAction(title: "Đóng", style: .cancel))
-
-        if let popover = alert.popoverPresentationController {
-            popover.sourceView = keyboardBtn
-            popover.sourceRect = keyboardBtn.bounds
-        }
-
-        present(alert, animated: true)
     }
 
     @objc private func toggleKeypadVisibility() {
         isKeypadHidden.toggle()
         updateKeypadVisibility()
-        showToast(message: isKeypadHidden ? "Đã ẩn bàn phím ảo" : "Đã hiện bàn phím ảo")
+        showToast(message: isKeypadHidden ? "Đã ẩn bàn phím ảo (nhấn giữ [🎮] để Setup)" : "Đã hiện bàn phím ảo")
     }
 
     private func updateKeypadVisibility() {
         UserDefaults.standard.set(isKeypadHidden, forKey: "keypad_hidden_\(currentGameId)")
-        decadeKeypadView?.isHidden = isKeypadHidden
+        let effectiveHidden = isForceFullscreenEnabled || isKeypadHidden
+        decadeKeypadView?.isHidden = effectiveHidden
         floatingShowKeypadBtn.isHidden = isForceFullscreenEnabled || !isKeypadHidden
-        keypadHeightConstraint?.constant = isKeypadHidden ? 0 : keypadCurrentHeight
-        if #available(iOS 14.0, *) {
-            keyboardBtn.menu = buildVirtualKeyboardMenu()
-        }
+        keypadHeightConstraint?.constant = effectiveHidden ? 0 : keypadCurrentHeight
         UIView.animate(withDuration: 0.2) {
             self.view.layoutIfNeeded()
         }
-    }
-
-    private func setKeypadHeight(_ height: CGFloat) {
-        keypadCurrentHeight = height
-        if !isKeypadHidden {
-            keypadHeightConstraint?.constant = height
-            UIView.animate(withDuration: 0.2) {
-                self.view.layoutIfNeeded()
-            }
-        }
-    }
-
-    // Công tắc cấu trúc phím
-    private func showLayoutSwitchDialog() {
-        let alert = UIAlertController(title: "Công tắc cấu trúc phím", message: "Chọn kiểu bàn phím mong muốn:", preferredStyle: .alert)
-
-        alert.addAction(UIAlertAction(title: "1. Decade Mũi tên (Mặc định - Điều hướng 8 chiều)", style: .default) { [weak self] _ in
-            self?.decadeKeypadView?.currentLayout = .arrows
-            self?.showToast(message: "Đã chuyển sang: Bố cục Mũi tên Decade")
-        })
-
-        alert.addAction(UIAlertAction(title: "2. Bàn phím số (Numpad 0-9, *, #)", style: .default) { [weak self] _ in
-            self?.decadeKeypadView?.currentLayout = .numpad
-            self?.showToast(message: "Đã chuyển sang: Bàn phím số (0-9)")
-        })
-
-        alert.addAction(UIAlertAction(title: "3. Kết hợp (Mũi tên & Phím số)", style: .default) { [weak self] _ in
-            self?.decadeKeypadView?.currentLayout = .combined
-            self?.showToast(message: "Đã chuyển sang: Kết hợp Mũi tên & Số")
-        })
-
-        alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
-        present(alert, animated: true)
-    }
-
-    // Tuỳ chỉnh kích thước bàn phím
-    private func showKeypadSizeDialog() {
-        let alert = UIAlertController(title: "Tuỳ chỉnh kích thước bàn phím", message: "Chọn chiều cao phù hợp với tay:", preferredStyle: .alert)
-
-        alert.addAction(UIAlertAction(title: "Nhỏ gọn (210pt)", style: .default) { [weak self] _ in
-            self?.setKeypadHeight(210)
-            self?.showToast(message: "Kích thước: Nhỏ gọn")
-        })
-        alert.addAction(UIAlertAction(title: "Vừa phải (245pt - Mặc định)", style: .default) { [weak self] _ in
-            self?.setKeypadHeight(245)
-            self?.showToast(message: "Kích thước: Vừa phải")
-        })
-        alert.addAction(UIAlertAction(title: "Lớn (290pt)", style: .default) { [weak self] _ in
-            self?.setKeypadHeight(290)
-            self?.showToast(message: "Kích thước: Lớn")
-        })
-        alert.addAction(UIAlertAction(title: "Rất lớn (330pt)", style: .default) { [weak self] _ in
-            self?.setKeypadHeight(330)
-            self?.showToast(message: "Kích thước: Rất lớn")
-        })
-
-        alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
-        present(alert, animated: true)
-    }
-
-    // Độ mờ / trong suốt
-    private func showKeypadOpacityDialog() {
-        let alert = UIAlertController(title: "Độ mờ bàn phím ảo", message: "Chọn mức độ trong suốt của phím:", preferredStyle: .alert)
-
-        alert.addAction(UIAlertAction(title: "Trong suốt cao (40%)", style: .default) { [weak self] _ in
-            self?.decadeKeypadView?.keypadAlphaValue = 0.40
-            self?.showToast(message: "Đã chỉnh độ mờ: 40%")
-        })
-        alert.addAction(UIAlertAction(title: "Vừa phải (70% - Mặc định)", style: .default) { [weak self] _ in
-            self?.decadeKeypadView?.keypadAlphaValue = 0.70
-            self?.showToast(message: "Đã chỉnh độ mờ: 70%")
-        })
-        alert.addAction(UIAlertAction(title: "Đậm nét (100%)", style: .default) { [weak self] _ in
-            self?.decadeKeypadView?.keypadAlphaValue = 1.00
-            self?.showToast(message: "Đã chỉnh độ mờ: 100%")
-        })
-
-        alert.addAction(UIAlertAction(title: "Hủy", style: .cancel))
-        present(alert, animated: true)
-    }
-
-    // Ẩn / Hiện từng phím
-    private func showIndividualKeysToggleDialog() {
-        guard let keypad = decadeKeypadView else { return }
-        let alert = UIAlertController(title: "Ẩn / Hiện từng phím", message: "Bật hoặc tắt các nhóm phím theo nhu cầu:", preferredStyle: .alert)
-
-        let diagTitle = (keypad.showDiagonalKeys ? "✓ " : "   ") + "Phím chéo (↖, ↗, ↙, ↘)"
-        alert.addAction(UIAlertAction(title: diagTitle, style: .default) { [weak self] _ in
-            keypad.showDiagonalKeys.toggle()
-            self?.showToast(message: keypad.showDiagonalKeys ? "Đã hiện phím chéo" : "Đã ẩn phím chéo")
-        })
-
-        let softTitle = (keypad.showSoftKeys ? "✓ " : "   ") + "Phím chức năng (L, R)"
-        alert.addAction(UIAlertAction(title: softTitle, style: .default) { [weak self] _ in
-            keypad.showSoftKeys.toggle()
-            self?.showToast(message: keypad.showSoftKeys ? "Đã hiện phím L, R" : "Đã ẩn phím L, R")
-        })
-
-        let fireTitle = (keypad.showFireKey ? "✓ " : "   ") + "Phím giữa F (Chọn / Đánh)"
-        alert.addAction(UIAlertAction(title: fireTitle, style: .default) { [weak self] _ in
-            keypad.showFireKey.toggle()
-            self?.showToast(message: keypad.showFireKey ? "Đã hiện phím F" : "Đã ẩn phím F")
-        })
-
-        alert.addAction(UIAlertAction(title: "Xong", style: .cancel))
-        present(alert, animated: true)
     }
 
     // Hẹn giờ tự tắt

@@ -291,12 +291,17 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     }
 
     @objc private func handleMemoryWarning() {
-        performRamCleanup(completion: nil)
+        URLCache.shared.removeAllCachedResponses()
+        GameViewController.purgeInactiveSlotFrames()
+        DecadePiPManager.shared.purgeBuffers()
+        DispatchQueue.global(qos: .utility).async {
+            jvm_bridge_clean_ram()
+        }
     }
 
     func performRamCleanup(completion: ((Double, Double) -> Void)? = nil) {
         let beforeMB = Double(jvm_bridge_get_used_ram_kb()) / 1024.0
-        let thresholdMB: Double = isInBackground ? 100.0 : 180.0
+        let thresholdMB: Double = isInBackground ? 80.0 : 140.0
         guard completion != nil || beforeMB > thresholdMB else { return }
 
         URLCache.shared.removeAllCachedResponses()
@@ -317,7 +322,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
     private func startAutoRamCleaner() {
         guard ramCleanTimer == nil else { return }
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
-        timer.schedule(deadline: .now() + 120.0, repeating: 120.0)
+        timer.schedule(deadline: .now() + 45.0, repeating: 45.0)
         timer.setEventHandler { [weak self] in
             DispatchQueue.main.async {
                 guard let self = self, self.isAutoCleanRamActive else { return }

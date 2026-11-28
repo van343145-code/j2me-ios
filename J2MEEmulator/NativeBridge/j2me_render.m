@@ -11,12 +11,15 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <CoreHaptics/CoreHaptics.h>
+#import <CommonCrypto/CommonDigest.h>
 #include "j2me_render.h"
 #include "jvm_bridge.h"
 #include "jvm.h"
 #include "jvm_util.h"
 #include <stdio.h>
+#include <string.h>
 #include <stdatomic.h>
+#include <pthread.h>
 #include <unistd.h>
 #include <dlfcn.h>
 
@@ -37,6 +40,17 @@
 //    When refcount reaches 0, CF resources are released immediately but
 //    the struct shell is kept for one frame to prevent ABA in acquire.
 
+typedef struct SharedImageEntry {
+    uint8_t sha256[32];
+    int length;
+    uint32_t bucket;
+    CGImageRef cgImage;
+    int width;
+    int height;
+    int refcount;
+    struct SharedImageEntry *next;
+} SharedImageEntry;
+
 typedef struct RenderContext {
     CGContextRef ctx;
     int width;
@@ -49,17 +63,27 @@ typedef struct RenderContext {
     int clipSaved;
     int ownsPixels;
     int slot;
+    void *jvm;
+    int countedBytes;
     _Atomic int32_t refcount;
+    struct RenderContext *prev_live;
+    struct RenderContext *next_live;
     struct RenderContext *next_dead;
 } RenderContext;
 
 typedef struct RenderImage {
     CGContextRef ctx;
-    CGImageRef cachedImage; // Cached immutable CGImage (eliminates 18,000+ allocs/sec!)
+    CGImageRef cachedImage; // Immutable pre-decoded CGImage (no duplicate ctx kept for immutable PNGs!)
     int width;
     int height;
     int isMutable;
+    int slot;
+    void *jvm;
+    int countedBytes;
+    SharedImageEntry *sharedEntry;
     _Atomic int32_t refcount;
+    struct RenderImage *prev_live;
+    struct RenderImage *next_live;
     struct RenderImage *next_dead;
 } RenderImage;
 
@@ -88,6 +112,10 @@ void j2me_render_set_split_view(int active) {
     atomic_store_explicit(&g_split_view_active, active ? 1 : 0, memory_order_release);
 }
 
+int j2me_render_is_split_view_active(void) {
+    return atomic_load_explicit(&g_split_view_active, memory_order_acquire);
+}
+
 void j2me_render_set_fps_limit(int fps) {
     if (fps < 0) fps = 30;
     atomic_store_explicit(&g_dynamic_fps_limit, fps, memory_order_release);
@@ -112,56 +140,102 @@ static inline int should_skip_screen_draw(RenderContext *rc) {
     return !is_slot_visible(rc->slot);
 }
 
-// Global tracking arrays for forced cleanup between game sessions.
-// Protected by g_track_lock. Entries are added on create, removed on release (refcount→0).
-#define TRACK_MAX 8192
-static RenderContext *g_live_rc[TRACK_MAX];
+// Unlimited O(1) doubly-linked tracking lists for forced cleanup across 24+ tabs.
+static RenderContext *g_live_rc_head = NULL;
 static int            g_live_rc_count = 0;
-static RenderImage   *g_live_img[TRACK_MAX];
+static RenderImage   *g_live_img_head = NULL;
 static int            g_live_img_count = 0;
 static spinlock_t     g_track_lock = {0, 0, 0};
 
+// Cross-slot SHA-256 immutable sprite deduplication cache (saves up to 24x bitmap RAM!)
+#define SHARED_IMG_BUCKETS 512
+static SharedImageEntry *g_shared_img_buckets[SHARED_IMG_BUCKETS] = {0};
+static pthread_mutex_t g_img_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static inline uint32_t sha256_bucket(const uint8_t sha[32], int length) {
+    uint32_t h = ((uint32_t)sha[0] << 24) | ((uint32_t)sha[1] << 16) | ((uint32_t)sha[2] << 8) | (uint32_t)sha[3];
+    h ^= (uint32_t)length * 2654435761u;
+    return h % SHARED_IMG_BUCKETS;
+}
+
+static void shared_img_release(SharedImageEntry *entry) {
+    if (!entry) return;
+    CGImageRef toRelease = NULL;
+    pthread_mutex_lock(&g_img_cache_lock);
+    entry->refcount--;
+    if (entry->refcount <= 0) {
+        uint32_t b = entry->bucket;
+        SharedImageEntry **cur = &g_shared_img_buckets[b];
+        while (*cur) {
+            if (*cur == entry) {
+                *cur = entry->next;
+                break;
+            }
+            cur = &(*cur)->next;
+        }
+        toRelease = entry->cgImage;
+        entry->cgImage = NULL;
+        free(entry);
+    }
+    pthread_mutex_unlock(&g_img_cache_lock);
+    if (toRelease) CGImageRelease(toRelease);
+}
+
 static void track_rc(RenderContext *rc) {
     spin_lock(&g_track_lock);
-    if (g_live_rc_count < TRACK_MAX) g_live_rc[g_live_rc_count++] = rc;
+    rc->prev_live = NULL;
+    rc->next_live = g_live_rc_head;
+    if (g_live_rc_head) g_live_rc_head->prev_live = rc;
+    g_live_rc_head = rc;
+    g_live_rc_count++;
     spin_unlock(&g_track_lock);
 }
 static void untrack_rc(RenderContext *rc) {
     spin_lock(&g_track_lock);
-    for (int i = 0; i < g_live_rc_count; i++) {
-        if (g_live_rc[i] == rc) {
-            g_live_rc[i] = g_live_rc[--g_live_rc_count];
-            break;
-        }
+    if (rc->prev_live || rc->next_live || g_live_rc_head == rc) {
+        if (rc->prev_live) rc->prev_live->next_live = rc->next_live;
+        else g_live_rc_head = rc->next_live;
+        if (rc->next_live) rc->next_live->prev_live = rc->prev_live;
+        rc->prev_live = NULL;
+        rc->next_live = NULL;
+        if (g_live_rc_count > 0) g_live_rc_count--;
     }
     spin_unlock(&g_track_lock);
 }
 static void track_img(RenderImage *img) {
     spin_lock(&g_track_lock);
-    if (g_live_img_count < TRACK_MAX) g_live_img[g_live_img_count++] = img;
+    img->prev_live = NULL;
+    img->next_live = g_live_img_head;
+    if (g_live_img_head) g_live_img_head->prev_live = img;
+    g_live_img_head = img;
+    g_live_img_count++;
     spin_unlock(&g_track_lock);
 }
 static void untrack_img(RenderImage *img) {
     spin_lock(&g_track_lock);
-    for (int i = 0; i < g_live_img_count; i++) {
-        if (g_live_img[i] == img) {
-            g_live_img[i] = g_live_img[--g_live_img_count];
-            break;
-        }
+    if (img->prev_live || img->next_live || g_live_img_head == img) {
+        if (img->prev_live) img->prev_live->next_live = img->next_live;
+        else g_live_img_head = img->next_live;
+        if (img->next_live) img->next_live->prev_live = img->prev_live;
+        img->prev_live = NULL;
+        img->next_live = NULL;
+        if (g_live_img_count > 0) g_live_img_count--;
     }
     spin_unlock(&g_track_lock);
 }
 
 // ============================================================
-// Native memory counter — visible to miniJVM GC via gc_sum_heap()
+// Per-JVM Native memory counter — visible to owning miniJVM GC via jvm->native_heap_size
 // ============================================================
-extern s64 g_native_extra_heap;
-
-static inline void native_heap_add(s32 bytes) {
-    __atomic_fetch_add(&g_native_extra_heap, (s64)bytes, __ATOMIC_RELAXED);
+static inline void native_heap_add_slot(int slot, void *jvm, s32 bytes) {
+    if (bytes != 0 && jvm) {
+        jvm_bridge_adjust_native_heap(slot, jvm, (s64)bytes);
+    }
 }
-static inline void native_heap_sub(s32 bytes) {
-    __atomic_fetch_sub(&g_native_extra_heap, (s64)bytes, __ATOMIC_RELAXED);
+static inline void native_heap_sub_slot(int slot, void *jvm, s32 bytes) {
+    if (bytes != 0 && jvm) {
+        jvm_bridge_adjust_native_heap(slot, jvm, -(s64)bytes);
+    }
 }
 
 // ============================================================
@@ -242,13 +316,16 @@ static inline void rc_release(RenderContext *rc) {
     if (atomic_fetch_sub_explicit(&rc->refcount, 1, memory_order_release) == 1) {
         atomic_thread_fence(memory_order_acquire);
         untrack_rc(rc); // remove from live tracking before freeing resources
-        int pixels = rc->ownsPixels ? rc->width * rc->height * 4 : 0;
+        int pixels = rc->countedBytes;
+        void *ownerJvm = rc->jvm;
+        int ownerSlot = rc->slot;
         CGContextRef ctx = rc->ctx;
         CTFontRef font = __atomic_exchange_n(&rc->font, NULL, __ATOMIC_ACQ_REL);
         int isOwner = rc->ownsPixels;
         rc->ctx = NULL;
         rc->clipSaved = 0;
         rc->ownsPixels = 0;
+        rc->countedBytes = 0;
         if (ctx) {
             if (isOwner) {
                 CGContextRestoreGState(ctx);
@@ -256,7 +333,7 @@ static inline void rc_release(RenderContext *rc) {
             CGContextRelease(ctx);
         }
         if (font) CFRelease(font);
-        if (pixels > 0) native_heap_sub(pixels);
+        if (pixels > 0) native_heap_sub_slot(ownerSlot, ownerJvm, pixels);
         enqueue_dead_rc(rc);
     }
 }
@@ -278,7 +355,12 @@ static inline void img_release(RenderImage *img) {
     if (atomic_fetch_sub_explicit(&img->refcount, 1, memory_order_release) == 1) {
         atomic_thread_fence(memory_order_acquire);
         untrack_img(img); // remove from live tracking before freeing resources
-        int pixels = img->width * img->height * 4;
+        int pixels = img->countedBytes;
+        void *ownerJvm = img->jvm;
+        int ownerSlot = img->slot;
+        img->countedBytes = 0;
+        SharedImageEntry *se = img->sharedEntry;
+        img->sharedEntry = NULL;
         CGImageRef ci = img->cachedImage;
         img->cachedImage = NULL;
         if (ci) CGImageRelease(ci);
@@ -290,7 +372,8 @@ static inline void img_release(RenderImage *img) {
             }
             CGContextRelease(ctx);
         }
-        if (pixels > 0) native_heap_sub(pixels);
+        if (se) shared_img_release(se);
+        if (pixels > 0) native_heap_sub_slot(ownerSlot, ownerJvm, pixels);
         enqueue_dead_img(img);
     }
 }
@@ -338,7 +421,7 @@ static inline void applyStrokeStyle(CGContextRef ctx, int style) {
 // Context management
 // ============================================================
 
-static RenderContext *createRenderContext(int width, int height) {
+static RenderContext *createRenderContext(int width, int height, void *jvm, int slot) {
     RenderContext *rc = (RenderContext *)calloc(1, sizeof(RenderContext));
     atomic_init(&rc->refcount, 1);
     rc->width = width;
@@ -364,11 +447,13 @@ static RenderContext *createRenderContext(int width, int height) {
     rc->strokeStyle = 0;
     rc->font = CTFontCreateWithName(CFSTR("Helvetica"), rc->fontSize, NULL);
     rc->ownsPixels = 1;
-    rc->slot = -1;
+    rc->slot = slot;
+    rc->jvm = jvm;
+    rc->countedBytes = width * height * 4;
     setColorFromARGB(rc->ctx, rc->currentArgb);
 
     track_rc(rc);
-    native_heap_add(width * height * 4);
+    native_heap_add_slot(slot, jvm, rc->countedBytes);
     return rc;
 }
 
@@ -381,12 +466,14 @@ static void destroyRenderContext(RenderContext *rc) {
 // Image management
 // ============================================================
 
-static RenderImage *createMutableImage(int width, int height) {
+static RenderImage *createMutableImage(int width, int height, void *jvm, int slot) {
     RenderImage *img = (RenderImage *)calloc(1, sizeof(RenderImage));
     atomic_init(&img->refcount, 1);
     img->width = width;
     img->height = height;
     img->isMutable = 1;
+    img->jvm = jvm;
+    img->slot = slot;
 
     CGColorSpaceRef cs = getColorSpace();
     img->ctx = CGBitmapContextCreate(NULL, width, height, 8, width * 4,
@@ -399,47 +486,121 @@ static RenderImage *createMutableImage(int width, int height) {
     CGContextSetLineCap(img->ctx, kCGLineCapSquare);
     CGContextSetLineJoin(img->ctx, kCGLineJoinMiter);
 
+    img->countedBytes = width * height * 4;
     track_img(img);
-    native_heap_add(width * height * 4);
+    native_heap_add_slot(slot, jvm, img->countedBytes);
     return img;
 }
 
-static RenderImage *createImageFromData(const uint8_t *data, int length) {
-    @autoreleasepool {
-        RenderImage *img = (RenderImage *)calloc(1, sizeof(RenderImage));
-        atomic_init(&img->refcount, 1);
-        img->isMutable = 0;
+static RenderImage *createImageFromData(const uint8_t *data, int length, void *jvm, int slot) {
+    uint8_t sha[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data, (CC_LONG)length, sha);
+    uint32_t bucket = sha256_bucket(sha, length);
 
+    // 1. Check cross-slot immutable sprite cache first (zero decode + zero duplicate pixel RAM!)
+    pthread_mutex_lock(&g_img_cache_lock);
+    SharedImageEntry *cur = g_shared_img_buckets[bucket];
+    while (cur) {
+        if (cur->length == length && memcmp(cur->sha256, sha, CC_SHA256_DIGEST_LENGTH) == 0 && cur->cgImage) {
+            cur->refcount++;
+            CGImageRef retained = CGImageRetain(cur->cgImage);
+            int w = cur->width;
+            int h = cur->height;
+            pthread_mutex_unlock(&g_img_cache_lock);
+
+            RenderImage *img = (RenderImage *)calloc(1, sizeof(RenderImage));
+            atomic_init(&img->refcount, 1);
+            img->width = w;
+            img->height = h;
+            img->isMutable = 0;
+            img->jvm = jvm;
+            img->slot = slot;
+            img->countedBytes = 0; // Shared with existing slot, zero extra bitmap RAM!
+            img->cachedImage = retained;
+            img->sharedEntry = cur;
+            track_img(img);
+            return img;
+        }
+        cur = cur->next;
+    }
+    pthread_mutex_unlock(&g_img_cache_lock);
+
+    @autoreleasepool {
         CFDataRef cfData = CFDataCreate(NULL, data, length);
         CGImageSourceRef source = CGImageSourceCreateWithData(cfData, NULL);
         CFRelease(cfData);
 
-        CGImageRef cgImage = NULL;
+        CGImageRef rawCgImage = NULL;
         if (source) {
-            cgImage = CGImageSourceCreateImageAtIndex(source, 0, NULL);
+            rawCgImage = CGImageSourceCreateImageAtIndex(source, 0, NULL);
             CFRelease(source);
         }
+        if (!rawCgImage) return NULL;
 
-        if (!cgImage) {
-            free(img);
-            return NULL;
+        int w = (int)CGImageGetWidth(rawCgImage);
+        int h = (int)CGImageGetHeight(rawCgImage);
+
+        // Pre-decode once to 32-bit premultiplied BGRA CGImage, then IMMEDIATELY free tmpCtx
+        // so immutable sprites never hold two separate pixel copies in RAM!
+        CGColorSpaceRef cs = getColorSpace();
+        CGContextRef tmpCtx = CGBitmapContextCreate(NULL, w, h, 8, w * 4,
+                                                    cs, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+        CGImageRef decodedImg = NULL;
+        if (tmpCtx) {
+            CGContextClearRect(tmpCtx, CGRectMake(0, 0, w, h));
+            CGContextDrawImage(tmpCtx, CGRectMake(0, 0, w, h), rawCgImage);
+            decodedImg = CGBitmapContextCreateImage(tmpCtx);
+            CGContextRelease(tmpCtx);
+        }
+        CGImageRelease(rawCgImage);
+        if (!decodedImg) return NULL;
+
+        // Publish into shared cache (check for concurrent decode race)
+        int insertedNew = 0;
+        SharedImageEntry *chosen = NULL;
+        pthread_mutex_lock(&g_img_cache_lock);
+        SharedImageEntry *existing = g_shared_img_buckets[bucket];
+        while (existing) {
+            if (existing->length == length && memcmp(existing->sha256, sha, CC_SHA256_DIGEST_LENGTH) == 0 && existing->cgImage) {
+                existing->refcount++;
+                chosen = existing;
+                break;
+            }
+            existing = existing->next;
+        }
+        if (!chosen) {
+            chosen = (SharedImageEntry *)calloc(1, sizeof(SharedImageEntry));
+            memcpy(chosen->sha256, sha, CC_SHA256_DIGEST_LENGTH);
+            chosen->length = length;
+            chosen->bucket = bucket;
+            chosen->cgImage = decodedImg; // Transfer ownership to shared entry
+            chosen->width = w;
+            chosen->height = h;
+            chosen->refcount = 1;
+            chosen->next = g_shared_img_buckets[bucket];
+            g_shared_img_buckets[bucket] = chosen;
+            insertedNew = 1;
+        }
+        CGImageRef retained = CGImageRetain(chosen->cgImage);
+        pthread_mutex_unlock(&g_img_cache_lock);
+
+        if (!insertedNew) {
+            CGImageRelease(decodedImg);
         }
 
-        img->width = (int)CGImageGetWidth(cgImage);
-        img->height = (int)CGImageGetHeight(cgImage);
-
-        CGColorSpaceRef cs = getColorSpace();
-        img->ctx = CGBitmapContextCreate(NULL, img->width, img->height, 8, img->width * 4,
-                                          cs, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
-        CGContextClearRect(img->ctx, CGRectMake(0, 0, img->width, img->height));
-        CGContextDrawImage(img->ctx, CGRectMake(0, 0, img->width, img->height), cgImage);
-        CGImageRelease(cgImage);
-
-        // Cache immutable CGImage once (avoids CGBitmapContextCreateImage on every draw!)
-        img->cachedImage = CGBitmapContextCreateImage(img->ctx);
+        RenderImage *img = (RenderImage *)calloc(1, sizeof(RenderImage));
+        atomic_init(&img->refcount, 1);
+        img->width = w;
+        img->height = h;
+        img->isMutable = 0;
+        img->jvm = jvm;
+        img->slot = slot;
+        img->cachedImage = retained;
+        img->sharedEntry = chosen;
+        img->countedBytes = insertedNew ? (w * h * 4) : 0;
 
         track_img(img);
-        native_heap_add(img->width * img->height * 4);
+        if (img->countedBytes > 0) native_heap_add_slot(slot, jvm, img->countedBytes);
         return img;
     }
 }
@@ -457,10 +618,8 @@ static s32 n_createContext(Runtime *runtime, JClass *clazz) {
     JniEnv *env = runtime->jnienv;
     s32 w = env->localvar_getInt(runtime->localvar, 0);
     s32 h = env->localvar_getInt(runtime->localvar, 1);
-    RenderContext *rc = createRenderContext(w, h);
-    if (rc) {
-        rc->slot = jvm_bridge_find_jvm_slot(runtime->jvm);
-    }
+    int slot = jvm_bridge_find_jvm_slot(runtime->jvm);
+    RenderContext *rc = createRenderContext(w, h, runtime->jvm, slot);
     env->push_long(runtime->stack, (s64)(intptr_t)rc);
     return RUNTIME_STATUS_NORMAL;
 }
@@ -896,7 +1055,8 @@ static s32 n_createMutableImage(Runtime *runtime, JClass *clazz) {
     JniEnv *env = runtime->jnienv;
     s32 w = env->localvar_getInt(runtime->localvar, 0);
     s32 h = env->localvar_getInt(runtime->localvar, 1);
-    RenderImage *img = createMutableImage(w, h);
+    int slot = jvm_bridge_find_jvm_slot(runtime->jvm);
+    RenderImage *img = createMutableImage(w, h, runtime->jvm, slot);
     env->push_long(runtime->stack, (s64)(intptr_t)img);
     return RUNTIME_STATUS_NORMAL;
 }
@@ -911,7 +1071,8 @@ static s32 n_createImageFromData(Runtime *runtime, JClass *clazz) {
         return RUNTIME_STATUS_NORMAL;
     }
     c8 *arrBody = arr->arr_body;
-    RenderImage *img = createImageFromData((uint8_t *)arrBody + offset, length);
+    int slot = jvm_bridge_find_jvm_slot(runtime->jvm);
+    RenderImage *img = createImageFromData((uint8_t *)arrBody + offset, length, runtime->jvm, slot);
     env->push_long(runtime->stack, (s64)(intptr_t)img);
     return RUNTIME_STATUS_NORMAL;
 }
@@ -989,7 +1150,7 @@ static s32 n_drawImage(Runtime *runtime, JClass *clazz) {
     if (anchor & 2) y -= imgH / 2;
     if (anchor & 32) y -= imgH;
 
-    CGImageRef cgImage = (!img->isMutable && img->cachedImage) ? img->cachedImage : CGBitmapContextCreateImage(img->ctx);
+    CGImageRef cgImage = (!img->isMutable && img->cachedImage) ? img->cachedImage : (img->ctx ? CGBitmapContextCreateImage(img->ctx) : NULL);
     int shouldRelease = (img->isMutable || !img->cachedImage);
     if (cgImage) {
         CGContextSaveGState(rc->ctx);
@@ -1051,7 +1212,7 @@ static s32 n_drawRegion(Runtime *runtime, JClass *clazz) {
     if (anchor & 2) yDst -= outH / 2;
     if (anchor & 32) yDst -= outH;
 
-    CGImageRef fullImage = (!img->isMutable && img->cachedImage) ? img->cachedImage : CGBitmapContextCreateImage(ictx);
+    CGImageRef fullImage = (!img->isMutable && img->cachedImage) ? img->cachedImage : (ictx ? CGBitmapContextCreateImage(ictx) : NULL);
     int releaseFull = (img->isMutable || !img->cachedImage);
     if (!fullImage) { img_release(img); rc_release(rc); return RUNTIME_STATUS_NORMAL; }
     CGImageRef subImage = CGImageCreateWithImageInRect(fullImage, CGRectMake(xSrc, ySrc, wSrc, hSrc));
@@ -1192,15 +1353,28 @@ static s32 n_getImageRGB(Runtime *runtime, JClass *clazz) {
     s32 h = env->localvar_getInt(runtime->localvar, 8);
 
     RenderImage *img = img_acquire(imgHandle);
-    if (!img || !img->ctx || !arr || !arr->arr_body || w <= 0 || h <= 0) {
+    if (!img || (!img->ctx && !img->cachedImage) || !arr || !arr->arr_body || w <= 0 || h <= 0) {
         img_release(img);
         return RUNTIME_STATUS_NORMAL;
     }
 
     s32 arrLen = arr->arr_length;
     s32 *dstData = (s32 *)arr->arr_body;
-    uint8_t *srcData = (uint8_t *)CGBitmapContextGetData(img->ctx);
+    CGContextRef tmpDecodedCtx = NULL;
+    CGContextRef readCtx = img->ctx;
+    if (!readCtx && img->cachedImage) {
+        CGColorSpaceRef cs = getColorSpace();
+        tmpDecodedCtx = CGBitmapContextCreate(NULL, img->width, img->height, 8, img->width * 4,
+                                              cs, kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+        if (tmpDecodedCtx) {
+            CGContextClearRect(tmpDecodedCtx, CGRectMake(0, 0, img->width, img->height));
+            CGContextDrawImage(tmpDecodedCtx, CGRectMake(0, 0, img->width, img->height), img->cachedImage);
+            readCtx = tmpDecodedCtx;
+        }
+    }
+    uint8_t *srcData = readCtx ? (uint8_t *)CGBitmapContextGetData(readCtx) : NULL;
     if (!srcData) {
+        if (tmpDecodedCtx) CGContextRelease(tmpDecodedCtx);
         img_release(img);
         return RUNTIME_STATUS_NORMAL;
     }
@@ -1235,6 +1409,7 @@ static s32 n_getImageRGB(Runtime *runtime, JClass *clazz) {
             dstData[dstIdx] = argb;
         }
     }
+    if (tmpDecodedCtx) CGContextRelease(tmpDecodedCtx);
     img_release(img);
     return RUNTIME_STATUS_NORMAL;
 }
@@ -1356,6 +1531,11 @@ static s32 n_getDynamicFpsLimit(Runtime *runtime, JClass *clazz) {
     return RUNTIME_STATUS_NORMAL;
 }
 
+static s32 n_getActiveSlotCount(Runtime *runtime, JClass *clazz) {
+    runtime->jnienv->push_int(runtime->stack, jvm_bridge_get_active_slot_count());
+    return RUNTIME_STATUS_NORMAL;
+}
+
 static s32 n_vibrate(Runtime *runtime, JClass *clazz) {
     if (j2me_render_is_background()) return RUNTIME_STATUS_NORMAL;
     s32 durationMs = runtime->jnienv->localvar_getInt(runtime->localvar, 0);
@@ -1447,6 +1627,7 @@ static java_native_method j2me_render_methods[] = {
     {CLS, "isBackground",        "()Z",                                  n_isBackground},
     {CLS, "isSlotRenderActive",  "()Z",                                  n_isSlotRenderActive},
     {CLS, "getDynamicFpsLimit",  "()I",                                  n_getDynamicFpsLimit},
+    {CLS, "getActiveSlotCount",  "()I",                                  n_getActiveSlotCount},
     {CLS, "vibrate",             "(I)V",                                 n_vibrate},
 };
 
@@ -1471,38 +1652,54 @@ void j2me_render_cleanup(void) {
     process_dead_shells();
 
     // Force-release all still-live RenderContexts (never destroyed by Java).
-    // These are guaranteed valid: untrack_rc removed freed ones from the array.
     spin_lock(&g_track_lock);
     int rc_count = g_live_rc_count;
-    for (int i = 0; i < g_live_rc_count; i++) {
-        RenderContext *rc = g_live_rc[i];
-        if (rc->ctx) { CGContextRelease(rc->ctx); rc->ctx = NULL; }
-        CTFontRef font = rc->font;
-        rc->font = NULL;
+    RenderContext *rc_cur = g_live_rc_head;
+    while (rc_cur) {
+        RenderContext *next = rc_cur->next_live;
+        if (rc_cur->ctx) { CGContextRelease(rc_cur->ctx); rc_cur->ctx = NULL; }
+        CTFontRef font = rc_cur->font;
+        rc_cur->font = NULL;
         if (font) CFRelease(font);
-        free(rc);
+        free(rc_cur);
+        rc_cur = next;
     }
+    g_live_rc_head = NULL;
     g_live_rc_count = 0;
 
     // Force-release all still-live RenderImages
     int img_count = g_live_img_count;
-    for (int i = 0; i < g_live_img_count; i++) {
-        RenderImage *img = g_live_img[i];
-        if (img->cachedImage) { CGImageRelease(img->cachedImage); img->cachedImage = NULL; }
-        if (img->ctx) { CGContextRelease(img->ctx); img->ctx = NULL; }
-        free(img);
+    RenderImage *img_cur = g_live_img_head;
+    while (img_cur) {
+        RenderImage *next = img_cur->next_live;
+        if (img_cur->cachedImage) { CGImageRelease(img_cur->cachedImage); img_cur->cachedImage = NULL; }
+        if (img_cur->ctx) { CGContextRelease(img_cur->ctx); img_cur->ctx = NULL; }
+        free(img_cur);
+        img_cur = next;
     }
+    g_live_img_head = NULL;
     g_live_img_count = 0;
     spin_unlock(&g_track_lock);
+
+    // Clear cross-slot shared image cache entries
+    pthread_mutex_lock(&g_img_cache_lock);
+    for (int b = 0; b < SHARED_IMG_BUCKETS; b++) {
+        SharedImageEntry *se = g_shared_img_buckets[b];
+        g_shared_img_buckets[b] = NULL;
+        while (se) {
+            SharedImageEntry *next = se->next;
+            if (se->cgImage) CGImageRelease(se->cgImage);
+            free(se);
+            se = next;
+        }
+    }
+    pthread_mutex_unlock(&g_img_cache_lock);
 
     // Clear dead queues
     atomic_store_explicit(&g_dead_rc_gen0, NULL, memory_order_relaxed);
     g_dead_rc_gen1 = NULL;
     atomic_store_explicit(&g_dead_img_gen0, NULL, memory_order_relaxed);
     g_dead_img_gen1 = NULL;
-
-    // Reset native heap counter
-    __atomic_store_n(&g_native_extra_heap, 0, __ATOMIC_RELAXED);
 
     // Stop haptic engine
     if (@available(iOS 13.0, *)) {

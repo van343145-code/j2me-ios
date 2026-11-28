@@ -192,8 +192,9 @@ class GameViewController: UIViewController, UITextFieldDelegate {
 
     nonisolated static func purgeInactiveSlotFrames() {
         let activeIdx = Int(jvm_bridge_get_focused_slot())
+        let splitActive = (j2me_render_is_split_view_active() != 0)
         slotFrameLock.lock()
-        let keepSlots = Set(0...6).union([activeIdx])
+        let keepSlots: Set<Int> = splitActive ? Set(0...5).union([activeIdx]) : [activeIdx]
         let keysToDrop = slotFrames.keys.filter { k in !keepSlots.contains(k) }
         for k in keysToDrop {
             slotFrames.removeValue(forKey: k)
@@ -1032,7 +1033,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
 
         updateTabStripVisibility()
         updateSplitFocusBorders()
-
+        GameViewController.purgeInactiveSlotFrames()
         showToast(message: "Chuyển sang Tab \(index + 1): \(session.appName)")
     }
 
@@ -1643,7 +1644,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         // Request immediate frame redraw upon unlock without injecting fake touch
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            if !self.isOledSleeping, let img = GameViewController.slotFrames[self.activeSlot] {
+            if !self.isOledSleeping, let img = self.cachedFrame(for: self.activeSlot) {
                 self.emulatorView.displayImage(img)
             }
             if !self.isOledSleeping {

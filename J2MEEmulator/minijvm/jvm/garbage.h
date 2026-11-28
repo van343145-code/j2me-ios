@@ -28,6 +28,7 @@ struct _GcCollectorType {
     MemoryBlock *header, *tmp_header, *tmp_tailer;
     s64 obj_count;
     s64 obj_heap_size;
+    s64 last_live_heap;
     s64 lastgc;//last gc at mills
     Runtime *runtime;
     //
@@ -81,6 +82,8 @@ void gc_move_objs_thread_2_gc(Runtime *runtime);
 void gc_dump_runtime(GcCollector *collector);
 
 s64 gc_sum_heap(GcCollector *collector);
+
+void gc_native_heap_add(MiniJVM *jvm, s64 delta);
 
 
 #ifdef __cplusplus

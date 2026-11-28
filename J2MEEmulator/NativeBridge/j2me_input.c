@@ -33,6 +33,14 @@ static int g_write_pos;
 static int g_read_pos;
 static pthread_mutex_t g_input_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_input_cond = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t g_slot_cond[JVM_BRIDGE_MAX_SLOTS];
+static pthread_once_t g_slot_cond_once = PTHREAD_ONCE_INIT;
+
+static void init_slot_conds(void) {
+    for (int i = 0; i < JVM_BRIDGE_MAX_SLOTS; i++) {
+        pthread_cond_init(&g_slot_cond[i], NULL);
+    }
+}
 
 static int g_canvas_width = 240;
 static int g_canvas_height = 320;
@@ -43,6 +51,7 @@ void j2me_input_set_canvas_size(int width, int height) {
 }
 
 static void enqueue_event(int type, int x, int y, int keyCode) {
+    pthread_once(&g_slot_cond_once, init_slot_conds);
     int slot = jvm_bridge_get_focused_slot();
     pthread_mutex_lock(&g_input_lock);
     int next = (g_write_pos + 1) & INPUT_QUEUE_MASK;
@@ -50,7 +59,11 @@ static void enqueue_event(int type, int x, int y, int keyCode) {
         g_queue[g_write_pos] = (InputEvent){type, x, y, keyCode, slot};
         g_write_pos = next;
     }
-    pthread_cond_broadcast(&g_input_cond);
+    if (slot >= 0 && slot < JVM_BRIDGE_MAX_SLOTS) {
+        pthread_cond_signal(&g_slot_cond[slot]);
+    } else {
+        pthread_cond_broadcast(&g_input_cond);
+    }
     pthread_mutex_unlock(&g_input_lock);
 }
 
@@ -99,8 +112,12 @@ void j2me_input_post_repaint(void) {
 }
 
 void j2me_input_wake_all(void) {
+    pthread_once(&g_slot_cond_once, init_slot_conds);
     pthread_mutex_lock(&g_input_lock);
     pthread_cond_broadcast(&g_input_cond);
+    for (int i = 0; i < JVM_BRIDGE_MAX_SLOTS; i++) {
+        pthread_cond_broadcast(&g_slot_cond[i]);
+    }
     pthread_mutex_unlock(&g_input_lock);
 }
 
@@ -159,6 +176,7 @@ static s32 n_waitForInput(Runtime *runtime, JClass *clazz) {
         return RUNTIME_STATUS_NORMAL;
     }
 
+    pthread_once(&g_slot_cond_once, init_slot_conds);
     jthread_block_enter(runtime);
     pthread_mutex_lock(&g_input_lock);
     int hasPending = (slot == jvm_bridge_get_focused_slot() && g_read_pos != g_write_pos);
@@ -169,7 +187,8 @@ static s32 n_waitForInput(Runtime *runtime, JClass *clazz) {
         struct timespec ts;
         ts.tv_sec = tv.tv_sec + (time_t)(total_usec / 1000000LL);
         ts.tv_nsec = (long)((total_usec % 1000000LL) * 1000LL);
-        pthread_cond_timedwait(&g_input_cond, &g_input_lock, &ts);
+        pthread_cond_t *cond = (slot >= 0 && slot < JVM_BRIDGE_MAX_SLOTS) ? &g_slot_cond[slot] : &g_input_cond;
+        pthread_cond_timedwait(cond, &g_input_lock, &ts);
     }
     pthread_mutex_unlock(&g_input_lock);
     jthread_block_exit(runtime);
@@ -192,10 +211,14 @@ static s32 n_isStopRequested(Runtime *runtime, JClass *clazz) {
 // ============================================================
 
 void j2me_input_reset(void) {
+    pthread_once(&g_slot_cond_once, init_slot_conds);
     pthread_mutex_lock(&g_input_lock);
     g_write_pos = 0;
     g_read_pos = 0;
     pthread_cond_broadcast(&g_input_cond);
+    for (int i = 0; i < JVM_BRIDGE_MAX_SLOTS; i++) {
+        pthread_cond_broadcast(&g_slot_cond[i]);
+    }
     pthread_mutex_unlock(&g_input_lock);
     printf("[J2ME Input] Ring buffer reset\n");
 }

@@ -101,17 +101,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.13-jarNO1
-          name: "jarNO1 iOS v1.0.13 (Fix dứt điểm iOS kill 45p: CPU 50%, RAM 221MB & jthread_lock spin)"
+          tag_name: v1.0.14-jarNO1
+          name: "jarNO1 iOS v1.0.14 (512MB Heap, x24 Multi-Tab RAM & CPU Engine kiểu NST)"
           body: |
-            ## jarNO1 iOS v1.0.13 — Fix Dứt Điểm iOS Dừng Nền (CPU 50% / RAM 221MB / `jthread_lock` spin)
-            - **Fix `Canvas.repaint()` không giảm nhịp FPS nền (`Canvas.java`)**:
-              - Trước đây ngưỡng anti-spin nền chỉ chặn khi `> 60 FPS`, nên game 30–40 FPS (như `NSOVTIDOL`) vẫn chạy full 40 tick/giây khi tắt màn -> ăn liên tục **50% CPU** và bị iOS bắn `CPU_FATAL` sau ~45 phút.
-              - Nay ép nhịp nền mượt **`10 FPS` (`100 ms/tick`)** qua `limitBgFps()` -> hạ CPU nền từ **50% xuống ~12%** trong khi auto đánh/nhặt/buff vẫn mượt 100%.
-            - **Fix `jthread_lock()` quay vòng 100% CPU (`jvm_util.c`)**:
-              - Thay `mtx_timedlock` với `t.tv_sec = 0` (epoch 1970 đã hết hạn, khiến Darwin fail tức thì và quay `sched_yield` 100% CPU) bằng `mtx_trylock` + `jthread_block_enter/exit` + ngủ lũy tiến (`5ms` nền / `1ms` tiền cảnh).
-              - Mở rộng giới hạn ngủ fallback `r1` (`jthread_waitTime`) lên `1000ms` khi chạy nền.
-            - **Fix RAM phình lên 221MB khi treo lâu (`garbage.c`)**:
-              - Gọi `malloc_zone_pressure_relief(NULL, 0)` ngay sau mỗi chu kỳ GC chạy nền để trả bộ nhớ đã giải phóng về lại nhân iOS, chặn Jetsam kill app.
+            ## jarNO1 iOS v1.0.14 — Nâng Cấp Động Cơ Đa Tab (x24) & Giới Hạn 512MB Kiểu J2ME NST
+            - **Thứ 1 — Nâng trần heap lên 512 MB & Fix lỗi GC toàn cục (`jvm_bridge.c`, `garbage.c`, `jvm.h`)**:
+              - Nâng `max_heap_size` lên **`512 MB` (`536870912` bytes)** giống `LangNatives.MaxMemory` của J2ME NST.
+              - Sửa lỗi nghiêm trọng `g_native_extra_heap` toàn cục làm cả 24 tab bị kích hoạt Stop-The-World GC liên tục cùng lúc -> chuyển sang đếm `native_heap_size` độc lập theo từng `MiniJVM`.
+              - Thêm **Soft-GC thông minh cho tab ẩn** (giữ live heap mỗi tab ẩn nhỏ + bỏ qua chu kỳ GC khi rác mới < 2MB + gọi `malloc_zone_pressure_relief` trả page về nhân iOS ngay).
+            - **Thứ 2 — Giảm mạnh RAM mỗi tab (`j2me_render.m`, `Canvas.java`, `GameViewController.swift`, `miniz_wrapper.c`)**:
+              - **Share ảnh sprite PNG bất biến qua SHA-256 giữa tất cả các tab** + bỏ giữ bản sao `img->ctx` thứ 2 -> cắt mạnh RAM ảnh khi treo x24 và bỏ giới hạn mảng cứng `TRACK_MAX = 8192`.
+              - Tự động xả `Canvas` offscreen `RenderContext` của tab đang ẩn (tạo lại tức thì khi chạm tab) và xả `slotFrames` thừa ngoài split-view.
+              - Dùng chung `mmap` read-only cache cho `.jar` trong `miniz_wrapper.c` thay vì mở/parse zip lại từ đầu ở mỗi tab.
+            - **Thứ 3 — Tiết kiệm CPU cho treo x24 (`Canvas.java`, `Display.java`, `interpreter.c`, `j2me_input.c`, `project.pbxproj`)**:
+              - Bỏ check `jdwp_client_count` trên từng lệnh bytecode khi không debug + bật `GCC_OPTIMIZATION_LEVEL = 3` cho bản `Release`.
+              - Điều phối wake per-slot trong `j2me_input.c`, tăng ngủ nhàn rỗi `Display.runEventLoop` ở tab ẩn lên `1000ms`, và tự động hạ nhịp vẽ nền theo số tab (`10 FPS` -> `5 FPS` -> `3-4 FPS` ở x12-x24).
           files: |
             jarNO1.ipa

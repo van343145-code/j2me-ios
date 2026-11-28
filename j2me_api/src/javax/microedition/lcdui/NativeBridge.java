@@ -59,6 +59,7 @@ public class NativeBridge {
     public static native boolean isBackground();
     public static native boolean isSlotRenderActive();
     public static native int getDynamicFpsLimit();
+    public static native int getActiveSlotCount();
 
     // UI (Forms/Lists/Alerts)
     public static native void formBegin(String title, int type);

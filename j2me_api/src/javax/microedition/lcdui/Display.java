@@ -244,18 +244,19 @@ public class Display {
                     canvas.forceFullRepaint();
                 } else if (!renderActive) {
                     canvas.flushTrailingRepaintIfNeeded();
+                    canvas.releaseHiddenContext();
                 }
             }
             wasInBackground = !renderActive;
 
             // Event-driven kernel wait (J2ME NST cool core):
-            // 0ms wake latency on touch/key/repaint, ~0% idle CPU (50ms fg / 250ms bg or hidden tab).
+            // 0ms wake latency on touch/key/repaint, ~0% idle CPU (50ms fg / 1000ms bg or hidden tab).
             if (!MIDlet.isDestroyRequested() && !NativeBridge.isStopRequested()) {
                 try {
-                    NativeBridge.waitForInput(renderActive ? 50 : 250);
+                    NativeBridge.waitForInput(renderActive ? 50 : 1000);
                 } catch (Throwable t) {
                     try {
-                        Thread.sleep(renderActive ? 50 : 250);
+                        Thread.sleep(renderActive ? 50 : 1000);
                     } catch (InterruptedException e) {
                         if (NativeBridge.isStopRequested() || MIDlet.isDestroyRequested()) {
                             break;

@@ -35,8 +35,8 @@ extern "C" {
 
 
 #define GARBAGE_OVERLOAD_DEFAULT 90  // overload of max heap size ,will active garbage collection
-#define GARBAGE_PERIOD_MS_DEFAULT 10 * 1000
-#define MAX_HEAP_SIZE_DEFAULT  200 * 1024 * 1024
+#define GARBAGE_PERIOD_MS_DEFAULT 15 * 1000
+#define MAX_HEAP_SIZE_DEFAULT  (512LL * 1024LL * 1024LL)
 #define MAX_STACK_SIZE_DEFAULT 4096
 
 
@@ -1983,6 +1983,7 @@ struct _MiniJVM {
     s64 max_heap_size;
     s32 heap_overload_percent;
     s64 garbage_collect_period_ms;
+    volatile s64 native_heap_size;
 
     JniEnv *env;
 

@@ -714,7 +714,7 @@ s32 execute_method_impl(MethodInfo *method, Runtime *pruntime) {
                 sp = runtime->stack->sp;
 
                 do {
-                    if (jdwp_client_count(jvm->jdwpserver)) {
+                    if (__builtin_expect(jvm->jdwp_enable && jdwp_client_count(jvm->jdwpserver), 0)) {
                         stack->sp = sp;
 
                         if (!runtime->thrd_info->no_pause) {

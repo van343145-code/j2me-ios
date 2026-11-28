@@ -1,10 +1,187 @@
 #include "miniz.h"
 #include "miniz_wrapper.h"
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#if defined(__APPLE__) || defined(__MACH__) || defined(__unix__)
+#include <pthread.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#define ZIP_CACHE_MAX_ARCHIVES 16
+
+typedef struct CachedZipArchive {
+    char path[1024];
+    time_t mtime_sec;
+    off_t file_size;
+    void *mapped;
+    size_t mapped_len;
+    mz_zip_archive archive;
+    pthread_mutex_t lock;
+    int active_refs;
+    int pending_free;
+    int is_ephemeral;
+    unsigned long long last_used;
+} CachedZipArchive;
+
+static CachedZipArchive *g_zip_cache[ZIP_CACHE_MAX_ARCHIVES] = {0};
+static pthread_mutex_t g_zip_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+static unsigned long long g_zip_lru_tick = 0;
+
+static void zip_cache_free_entry(CachedZipArchive *entry) {
+    if (!entry) return;
+    mz_zip_reader_end(&entry->archive);
+    if (entry->mapped && entry->mapped != MAP_FAILED && entry->mapped_len > 0) {
+        munmap(entry->mapped, entry->mapped_len);
+    }
+    pthread_mutex_destroy(&entry->lock);
+    free(entry);
+}
+
+static void zip_cache_invalidate(char const *jarpath) {
+    if (!jarpath) return;
+    CachedZipArchive *to_free = NULL;
+    pthread_mutex_lock(&g_zip_cache_lock);
+    for (int i = 0; i < ZIP_CACHE_MAX_ARCHIVES; i++) {
+        CachedZipArchive *e = g_zip_cache[i];
+        if (e && strcmp(e->path, jarpath) == 0) {
+            e->pending_free = 1;
+            if (e->active_refs == 0) {
+                g_zip_cache[i] = NULL;
+                to_free = e;
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&g_zip_cache_lock);
+    if (to_free) zip_cache_free_entry(to_free);
+}
+
+static CachedZipArchive *zip_cache_acquire(char const *jarpath) {
+    if (!jarpath || strlen(jarpath) >= 1024) return NULL;
+    struct stat st;
+    if (stat(jarpath, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0) {
+        return NULL;
+    }
+
+    CachedZipArchive *retired = NULL;
+    pthread_mutex_lock(&g_zip_cache_lock);
+    for (int i = 0; i < ZIP_CACHE_MAX_ARCHIVES; i++) {
+        CachedZipArchive *e = g_zip_cache[i];
+        if (e && !e->pending_free && strcmp(e->path, jarpath) == 0) {
+            if (e->file_size == st.st_size && e->mtime_sec == st.st_mtime) {
+                e->active_refs++;
+                e->last_used = ++g_zip_lru_tick;
+                pthread_mutex_unlock(&g_zip_cache_lock);
+                return e;
+            } else {
+                e->pending_free = 1;
+                if (e->active_refs == 0) {
+                    g_zip_cache[i] = NULL;
+                    retired = e;
+                }
+                break;
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_zip_cache_lock);
+    if (retired) zip_cache_free_entry(retired);
+
+    // Cache miss: mmap read-only once so 24 JVMs share kernel file-backed pages with 0 dirty RAM.
+    int fd = open(jarpath, O_RDONLY);
+    if (fd < 0) return NULL;
+    size_t len = (size_t)st.st_size;
+    void *mapped = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
+    close(fd);
+    if (mapped == MAP_FAILED) return NULL;
+
+    CachedZipArchive *created = (CachedZipArchive *)calloc(1, sizeof(CachedZipArchive));
+    if (!created) {
+        munmap(mapped, len);
+        return NULL;
+    }
+    snprintf(created->path, sizeof(created->path), "%s", jarpath);
+    created->mtime_sec = st.st_mtime;
+    created->file_size = st.st_size;
+    created->mapped = mapped;
+    created->mapped_len = len;
+    if (mz_zip_reader_init_mem(&created->archive, mapped, len, 0) == MZ_FALSE) {
+        munmap(mapped, len);
+        free(created);
+        return NULL;
+    }
+    pthread_mutex_init(&created->lock, NULL);
+
+    CachedZipArchive *evicted = NULL;
+    pthread_mutex_lock(&g_zip_cache_lock);
+    // Double-check if another thread cached the exact same JAR concurrently
+    for (int i = 0; i < ZIP_CACHE_MAX_ARCHIVES; i++) {
+        CachedZipArchive *e = g_zip_cache[i];
+        if (e && !e->pending_free && strcmp(e->path, jarpath) == 0 &&
+            e->file_size == st.st_size && e->mtime_sec == st.st_mtime) {
+            e->active_refs++;
+            e->last_used = ++g_zip_lru_tick;
+            pthread_mutex_unlock(&g_zip_cache_lock);
+            zip_cache_free_entry(created);
+            return e;
+        }
+    }
+
+    int target_slot = -1;
+    unsigned long long oldest_tick = (unsigned long long)-1;
+    for (int i = 0; i < ZIP_CACHE_MAX_ARCHIVES; i++) {
+        if (!g_zip_cache[i]) {
+            target_slot = i;
+            break;
+        }
+        if (g_zip_cache[i]->active_refs == 0 && g_zip_cache[i]->last_used < oldest_tick) {
+            oldest_tick = g_zip_cache[i]->last_used;
+            target_slot = i;
+        }
+    }
+    if (target_slot < 0) {
+        // All cache slots busy: return ephemeral non-table reader freed right after call.
+        created->is_ephemeral = 1;
+        pthread_mutex_unlock(&g_zip_cache_lock);
+        return created;
+    }
+    if (g_zip_cache[target_slot]) {
+        evicted = g_zip_cache[target_slot];
+    }
+    created->active_refs = 1;
+    created->last_used = ++g_zip_lru_tick;
+    g_zip_cache[target_slot] = created;
+    pthread_mutex_unlock(&g_zip_cache_lock);
+
+    if (evicted) zip_cache_free_entry(evicted);
+    return created;
+}
+
+static void zip_cache_release(CachedZipArchive *entry) {
+    if (!entry) return;
+    CachedZipArchive *to_free = NULL;
+    pthread_mutex_lock(&g_zip_cache_lock);
+    if (entry->active_refs > 0) entry->active_refs--;
+    if (entry->pending_free && entry->active_refs == 0) {
+        for (int i = 0; i < ZIP_CACHE_MAX_ARCHIVES; i++) {
+            if (g_zip_cache[i] == entry) {
+                g_zip_cache[i] = NULL;
+                break;
+            }
+        }
+        to_free = entry;
+    }
+    pthread_mutex_unlock(&g_zip_cache_lock);
+    if (to_free) zip_cache_free_entry(to_free);
+}
+#endif
 
 
 s32 zip_loadfile(char const *jarpath, char const *filename, ByteBuf *buf) {
     int file_index = 0;
-    mz_zip_archive zipArchive = {0};
     mz_zip_archive_file_stat file_stat = {0};
 
     //skit the first '/'
@@ -12,6 +189,48 @@ s32 zip_loadfile(char const *jarpath, char const *filename, ByteBuf *buf) {
         filename += 1;
     }
 
+#if defined(__APPLE__) || defined(__MACH__) || defined(__unix__)
+    CachedZipArchive *cached = zip_cache_acquire(jarpath);
+    if (cached) {
+        if (cached->is_ephemeral) {
+            // Uncached temporary mmap (all 16 slots busy)
+            int ret = 0;
+            file_index = mz_zip_reader_locate_file(&cached->archive, filename, NULL, 0);
+            if (!mz_zip_reader_file_stat(&cached->archive, file_index, &file_stat)) {
+                ret = -1;
+            } else {
+                size_t uncompressed_size = (size_t) file_stat.m_uncomp_size;
+                bytebuf_expand(buf, uncompressed_size);
+                if (mz_zip_reader_extract_file_to_mem(&cached->archive, file_stat.m_filename, buf->buf, uncompressed_size, 0) == MZ_FALSE) {
+                    ret = -1;
+                } else {
+                    buf->wp = uncompressed_size;
+                }
+            }
+            zip_cache_free_entry(cached);
+            return ret;
+        }
+        int ret = 0;
+        pthread_mutex_lock(&cached->lock);
+        file_index = mz_zip_reader_locate_file(&cached->archive, filename, NULL, 0);
+        if (!mz_zip_reader_file_stat(&cached->archive, file_index, &file_stat)) {
+            ret = -1;
+        } else {
+            size_t uncompressed_size = (size_t) file_stat.m_uncomp_size;
+            bytebuf_expand(buf, uncompressed_size);
+            if (mz_zip_reader_extract_file_to_mem(&cached->archive, file_stat.m_filename, buf->buf, uncompressed_size, 0) == MZ_FALSE) {
+                ret = -1;
+            } else {
+                buf->wp = uncompressed_size;
+            }
+        }
+        pthread_mutex_unlock(&cached->lock);
+        zip_cache_release(cached);
+        return ret;
+    }
+#endif
+
+    mz_zip_archive zipArchive = {0};
     int ret = 0;
     if (mz_zip_reader_init_file(&zipArchive, jarpath, 0) == MZ_FALSE) {//
         ret = -1;
@@ -38,7 +257,6 @@ s32 zip_loadfile(char const *jarpath, char const *filename, ByteBuf *buf) {
 
 s32 zip_loadfile_to_mem(char const *jarpath, char const *filename, c8 *buf, s64 bufsize) {
     int file_index = 0;
-    mz_zip_archive zipArchive = {0};
     mz_zip_archive_file_stat file_stat = {0};
 
     //skit the first '/'
@@ -46,9 +264,35 @@ s32 zip_loadfile_to_mem(char const *jarpath, char const *filename, c8 *buf, s64 
         filename += 1;
     }
 
-//    if (filename[0] == '0' && filename[1] == '\0') {
-//        s32 debug = 1;
-//    }
+#if defined(__APPLE__) || defined(__MACH__) || defined(__unix__)
+    CachedZipArchive *cached = zip_cache_acquire(jarpath);
+    if (cached) {
+        if (cached->is_ephemeral) {
+            int ret = 0;
+            file_index = mz_zip_reader_locate_file(&cached->archive, filename, NULL, 0);
+            if (!mz_zip_reader_file_stat(&cached->archive, file_index, &file_stat)) {
+                ret = -1;
+            } else if (!mz_zip_reader_extract_file_to_mem(&cached->archive, file_stat.m_filename, buf, bufsize, MZ_ZIP_FLAG_CASE_SENSITIVE)) {
+                ret = -1;
+            }
+            zip_cache_free_entry(cached);
+            return ret;
+        }
+        int ret = 0;
+        pthread_mutex_lock(&cached->lock);
+        file_index = mz_zip_reader_locate_file(&cached->archive, filename, NULL, 0);
+        if (!mz_zip_reader_file_stat(&cached->archive, file_index, &file_stat)) {
+            ret = -1;
+        } else if (!mz_zip_reader_extract_file_to_mem(&cached->archive, file_stat.m_filename, buf, bufsize, MZ_ZIP_FLAG_CASE_SENSITIVE)) {
+            ret = -1;
+        }
+        pthread_mutex_unlock(&cached->lock);
+        zip_cache_release(cached);
+        return ret;
+    }
+#endif
+
+    mz_zip_archive zipArchive = {0};
     int ret = 0;
     if (mz_zip_reader_init_file(&zipArchive, jarpath, 0) == MZ_FALSE) {//
         ret = -1;
@@ -71,7 +315,6 @@ s32 zip_loadfile_to_mem(char const *jarpath, char const *filename, c8 *buf, s64 
 
 s64 zip_get_file_unzip_size(char const *jarpath, char const *filename) {
     int file_index = 0;
-    mz_zip_archive zipArchive = {0};
     mz_zip_archive_file_stat file_stat = {0};
 
     //skit the first '/'
@@ -79,6 +322,35 @@ s64 zip_get_file_unzip_size(char const *jarpath, char const *filename) {
         filename += 1;
     }
 
+#if defined(__APPLE__) || defined(__MACH__) || defined(__unix__)
+    CachedZipArchive *cached = zip_cache_acquire(jarpath);
+    if (cached) {
+        if (cached->is_ephemeral) {
+            s64 ret = 0;
+            file_index = mz_zip_reader_locate_file(&cached->archive, filename, NULL, 0);
+            if (!mz_zip_reader_file_stat(&cached->archive, file_index, &file_stat)) {
+                ret = -1;
+            } else {
+                ret = (s64) file_stat.m_uncomp_size;
+            }
+            zip_cache_free_entry(cached);
+            return ret;
+        }
+        s64 ret = 0;
+        pthread_mutex_lock(&cached->lock);
+        file_index = mz_zip_reader_locate_file(&cached->archive, filename, NULL, 0);
+        if (!mz_zip_reader_file_stat(&cached->archive, file_index, &file_stat)) {
+            ret = -1;
+        } else {
+            ret = (s64) file_stat.m_uncomp_size;
+        }
+        pthread_mutex_unlock(&cached->lock);
+        zip_cache_release(cached);
+        return ret;
+    }
+#endif
+
+    mz_zip_archive zipArchive = {0};
     s64 ret = 0;
     if (mz_zip_reader_init_file(&zipArchive, jarpath, 0) == MZ_FALSE) {//
         ret = -1;
@@ -98,7 +370,6 @@ s64 zip_get_file_unzip_size(char const *jarpath, char const *filename) {
 
 s32 zip_get_file_index(char const *jarpath, char const *filename) {
     int file_index = 0;
-    mz_zip_archive zipArchive = {0};
     mz_zip_archive_file_stat file_stat = {0};
 
     //skit the first '/'
@@ -106,6 +377,35 @@ s32 zip_get_file_index(char const *jarpath, char const *filename) {
         filename += 1;
     }
 
+#if defined(__APPLE__) || defined(__MACH__) || defined(__unix__)
+    CachedZipArchive *cached = zip_cache_acquire(jarpath);
+    if (cached) {
+        if (cached->is_ephemeral) {
+            int ret = 0;
+            file_index = mz_zip_reader_locate_file(&cached->archive, filename, NULL, 0);
+            if (!mz_zip_reader_file_stat(&cached->archive, file_index, &file_stat)) {
+                ret = -1;
+            } else {
+                ret = file_index;
+            }
+            zip_cache_free_entry(cached);
+            return ret;
+        }
+        int ret = 0;
+        pthread_mutex_lock(&cached->lock);
+        file_index = mz_zip_reader_locate_file(&cached->archive, filename, NULL, 0);
+        if (!mz_zip_reader_file_stat(&cached->archive, file_index, &file_stat)) {
+            ret = -1;
+        } else {
+            ret = file_index;
+        }
+        pthread_mutex_unlock(&cached->lock);
+        zip_cache_release(cached);
+        return ret;
+    }
+#endif
+
+    mz_zip_archive zipArchive = {0};
     int ret = 0;
     if (mz_zip_reader_init_file(&zipArchive, jarpath, 0) == MZ_FALSE) {//
         ret = -1;
@@ -124,6 +424,9 @@ s32 zip_get_file_index(char const *jarpath, char const *filename) {
 
 
 s32 zip_savefile_mem(char const *jarpath, char const *filename, char const *buf, int size) {
+#if defined(__APPLE__) || defined(__MACH__) || defined(__unix__)
+    zip_cache_invalidate(jarpath);
+#endif
     int file_index = 0;
     mz_zip_archive zipArchive = {0};
     mz_zip_archive_file_stat file_stat = {0};

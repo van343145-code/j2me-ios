@@ -109,6 +109,38 @@ int jvm_bridge_get_jvm_slot(void *jvm_ptr) {
     return slot < 0 ? 0 : slot;
 }
 
+int jvm_bridge_get_active_slot_count(void) {
+    int count = 0;
+    pthread_mutex_lock(&g_slots_lock);
+    for (int i = 0; i < JVM_BRIDGE_MAX_SLOTS; i++) {
+        if (g_slots[i].jvm || g_slots[i].initializing) {
+            count++;
+        }
+    }
+    pthread_mutex_unlock(&g_slots_lock);
+    return count > 0 ? count : 1;
+}
+
+int jvm_bridge_is_jvm_visible(void *jvm_ptr) {
+    if (j2me_render_is_background()) return 0;
+    if (j2me_render_is_split_view_active()) return 1;
+    int slot = jvm_bridge_find_jvm_slot(jvm_ptr);
+    if (slot < 0) return 1; // Treat still-initializing slot as visible
+    return slot == atomic_load(&g_focused_slot);
+}
+
+void jvm_bridge_adjust_native_heap(int slot, void *expected_jvm, long long delta) {
+    if (!expected_jvm || delta == 0) return;
+    if (slot < 0 || slot >= JVM_BRIDGE_MAX_SLOTS) return;
+    pthread_mutex_lock(&g_slots_lock);
+    MiniJVM *live = g_slots[slot].jvm;
+    MiniJVM *retiring = (MiniJVM *)g_slots[slot].retiring_jvm;
+    if (live == expected_jvm || retiring == expected_jvm) {
+        gc_native_heap_add((MiniJVM *)expected_jvm, (s64)delta);
+    }
+    pthread_mutex_unlock(&g_slots_lock);
+}
+
 static void finish_slot_initialization(int slot) {
     pthread_mutex_lock(&g_slots_lock);
     g_slots[slot].initializing = 0;
@@ -158,8 +190,8 @@ int jvm_bridge_init_slot(int slot, const char *res_root, const char *save_root, 
 
     jvm->jdwp_enable = 0;
     jvm->jdwp_suspend_on_start = 0;
-    jvm->max_heap_size = 96 * 1024 * 1024;
-    jvm->garbage_collect_period_ms = 10000;
+    jvm->max_heap_size = 512LL * 1024LL * 1024LL; // 512 MB matching J2ME NST LangNatives.MaxMemory
+    jvm->garbage_collect_period_ms = 15000;
     jvm->heap_overload_percent = 75;
 
     s32 ret = jvm_init(jvm, (c8 *)bootclasspath, (c8 *)classpath);

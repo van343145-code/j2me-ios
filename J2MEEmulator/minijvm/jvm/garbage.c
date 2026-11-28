@@ -318,12 +318,18 @@ void gc_dump_runtime(GcCollector *collector) {
 #include <malloc/malloc.h>
 #endif
 
-// External native memory counter & background/shell hooks from j2me_render.m.
-// Allows GC to account for native memory pressure, throttle background wakeups,
-// and purge deferred dead CGContext/CGImage shells even when rendering is bypassed.
+// Legacy global counter retained at 0 for symbol compatibility; per-JVM native_heap_size
+// is tracked inside each MiniJVM instance so 24 slots never cross-trigger GC simultaneously.
 s64 g_native_extra_heap = 0;
 extern int j2me_render_is_background(void);
 extern void j2me_render_purge_dead_shells(void);
+extern int jvm_bridge_get_active_slot_count(void);
+extern int jvm_bridge_is_jvm_visible(void *jvm_ptr);
+
+void gc_native_heap_add(MiniJVM *jvm, s64 delta) {
+    if (!jvm || delta == 0) return;
+    __atomic_fetch_add(&jvm->native_heap_size, delta, __ATOMIC_RELAXED);
+}
 
 s64 gc_sum_heap(GcCollector *collector) {
     s64 hsize = threadlist_sum_heap(collector->jvm);
@@ -332,7 +338,9 @@ s64 gc_sum_heap(GcCollector *collector) {
         hsize += collector->obj_heap_size;
     }
     spin_unlock(&collector->lock);
-    s64 native_extra = __atomic_load_n(&g_native_extra_heap, __ATOMIC_RELAXED);
+    s64 native_extra = collector->jvm
+        ? __atomic_load_n(&collector->jvm->native_heap_size, __ATOMIC_RELAXED)
+        : 0;
     if (native_extra > 0) hsize += native_extra;
     return hsize;
 }
@@ -372,24 +380,49 @@ s32 _gc_thread_run(void *para) {
         }
 
         s64 heap = gc_sum_heap(collector);
-        s64 threshold = jvm->max_heap_size * jvm->heap_overload_percent / 100;
+        s64 hard_threshold = jvm->max_heap_size * jvm->heap_overload_percent / 100;
         int in_bg = j2me_render_is_background();
-        s64 effective_period = in_bg ? (jvm->garbage_collect_period_ms * 3) : jvm->garbage_collect_period_ms;
+        int is_vis = jvm_bridge_is_jvm_visible(jvm);
+        int slots = jvm_bridge_get_active_slot_count();
+
+        // Multi-tab x24 soft cap: allow 512MB max ceiling like J2ME NST while keeping
+        // hidden slots compact so 24 concurrent JVMs stay safely under iOS Jetsam limits.
+        s64 soft_threshold = hard_threshold;
+        if (in_bg || !is_vis) {
+            if (slots >= 12) {
+                soft_threshold = 24LL * 1024LL * 1024LL;
+            } else if (slots >= 4) {
+                soft_threshold = 36LL * 1024LL * 1024LL;
+            } else {
+                soft_threshold = 64LL * 1024LL * 1024LL;
+            }
+            if (soft_threshold > hard_threshold) soft_threshold = hard_threshold;
+        }
+
+        s64 effective_period = (in_bg || !is_vis) ? 30000 : jvm->garbage_collect_period_ms;
         if (effective_period < 1000) effective_period = 1000;
 
-        if (collector->lastgc == 0 || (cur_mil - collector->lastgc) >= effective_period || heap >= threshold) {
+        int force_req = (collector->lastgc == 0);
+        int hard_hit = (heap >= hard_threshold);
+        int soft_hit = (in_bg || !is_vis) && (heap >= soft_threshold) &&
+                       (heap >= collector->last_live_heap + (4LL * 1024LL * 1024LL) || (cur_mil - collector->lastgc) >= 45000);
+        int periodic_due = ((cur_mil - collector->lastgc) >= effective_period) &&
+                           (heap >= collector->last_live_heap + (2LL * 1024LL * 1024LL) || (cur_mil - collector->lastgc) >= 90000);
+
+        if (force_req || hard_hit || soft_hit || periodic_due) {
             _garbage_collect(collector);
             collector->lastgc = currentTimeMillis();
+            collector->last_live_heap = gc_sum_heap(collector);
 #if defined(__APPLE__) || defined(__MACH__)
-            if (in_bg) {
-                // Return freed malloc pages back to iOS kernel during background GC to prevent 220MB+ Jetsam creep.
+            if (in_bg || !is_vis || slots >= 4) {
+                // Return freed malloc pages back to iOS kernel during background / multi-tab GC to prevent Jetsam kills.
                 malloc_zone_pressure_relief(NULL, 0);
             }
 #endif
         }
         // Always sleep after GC check/run so a steady live heap >= threshold never
         // tight-loops _garbage_collect at 100% CPU (prevents iOS background CPU_FATAL SIGKILL).
-        threadSleep(in_bg ? 3000 : 1000);
+        threadSleep((in_bg || !is_vis) ? 3000 : 1000);
     }
     collector->_garbage_thread_status = GARBAGE_THREAD_DEAD;
     thrd_exit(0);

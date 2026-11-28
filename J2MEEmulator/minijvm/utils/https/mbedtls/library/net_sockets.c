@@ -583,7 +583,7 @@ int mbedtls_net_send( void *ctx, const unsigned char *buf, size_t len )
         if( errno == EPIPE || errno == ECONNRESET )
             return( MBEDTLS_ERR_NET_CONN_RESET );
 
-        if( errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK )
+        if( errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS )
             return( MBEDTLS_ERR_SSL_WANT_WRITE );
 #endif
 

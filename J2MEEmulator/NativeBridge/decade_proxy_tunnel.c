@@ -38,16 +38,15 @@ void decade_network_optimize_socket(int fd) {
     setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, (const void *)&keepalive, sizeof(keepalive));
 
 #if defined(__APPLE__) || defined(__MACH__)
-    // Clean iOS-friendly TCP keepalive matching carrier NAT & Wi-Fi sleep timers without aggressive radio churn
-    int keepidle = 20;
+    // Tight 10s idle probe + 5s interval + 24 retries (~130s fault tolerance):
+    // keeps 4G/5G CGNAT ports & Wi-Fi radio bindings alive continuously when screen locks.
+    int keepidle = 10;
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPALIVE, (const void *)&keepidle, sizeof(keepidle));
 
-    // Repeat probe every 10 seconds if unacknowledged
-    int keepintvl = 10;
+    int keepintvl = 5;
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPINTVL, (const void *)&keepintvl, sizeof(keepintvl));
 
-    // Drop only after 12 unacknowledged probes (~140s tolerance for temporary cellular/Wi-Fi handovers)
-    int keepcnt = 12;
+    int keepcnt = 24;
     setsockopt(fd, IPPROTO_TCP, TCP_KEEPCNT, (const void *)&keepcnt, sizeof(keepcnt));
 #endif
 
@@ -56,23 +55,22 @@ void decade_network_optimize_socket(int fd) {
     setsockopt(fd, SOL_SOCKET, SO_SNDBUF, (const void *)&bufsize, sizeof(bufsize));
     setsockopt(fd, SOL_SOCKET, SO_RCVBUF, (const void *)&bufsize, sizeof(bufsize));
 
-    // 5. Low-delay interactive QoS / anti-bufferbloat for responsive game ping
-#if defined(IP_TOS) && defined(IPTOS_LOWDELAY)
-    int tos = IPTOS_LOWDELAY;
-    setsockopt(fd, IPPROTO_IP, IP_TOS, (const void *)&tos, sizeof(tos));
-#endif
-#if defined(IPV6_TCLASS) && defined(IPTOS_LOWDELAY)
-    int tclass = IPTOS_LOWDELAY;
-    setsockopt(fd, IPPROTO_IPV6, IPV6_TCLASS, (const void *)&tclass, sizeof(tclass));
-#endif
+    // 5. Darwin Voice/Real-time QoS + anti-bufferbloat (keeps Wi-Fi WMM AC_VO & cellular active off-screen)
 #if defined(__APPLE__) || defined(__MACH__)
 #if defined(TCP_NOTSENT_LOWAT)
     int notsent_lowat = 16384;
     setsockopt(fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT, (const void *)&notsent_lowat, sizeof(notsent_lowat));
 #endif
-#if defined(SO_NET_SERVICE_TYPE) && defined(NET_SERVICE_TYPE_RD)
+#if defined(SO_NET_SERVICE_TYPE) && defined(NET_SERVICE_TYPE_VO)
+    int svc_type = NET_SERVICE_TYPE_VO;
+    setsockopt(fd, SOL_SOCKET, SO_NET_SERVICE_TYPE, (const void *)&svc_type, sizeof(svc_type));
+#elif defined(SO_NET_SERVICE_TYPE) && defined(NET_SERVICE_TYPE_RD)
     int svc_type = NET_SERVICE_TYPE_RD;
     setsockopt(fd, SOL_SOCKET, SO_NET_SERVICE_TYPE, (const void *)&svc_type, sizeof(svc_type));
+#endif
+#if defined(SO_TRAFFIC_CLASS) && defined(SO_TC_VO)
+    int tc = SO_TC_VO;
+    setsockopt(fd, SOL_SOCKET, SO_TRAFFIC_CLASS, (const void *)&tc, sizeof(tc));
 #endif
 #endif
 }
@@ -99,6 +97,12 @@ void decade_proxy_track_socket(int slot, int fd) {
     decade_network_optimize_socket(fd);
     pthread_mutex_lock(&g_sock_lock);
     int count = g_slot_socket_counts[slot];
+    for (int i = 0; i < count; i++) {
+        if (g_slot_sockets[slot][i] == fd) {
+            pthread_mutex_unlock(&g_sock_lock);
+            return;
+        }
+    }
     if (count < MAX_SLOT_SOCKETS) {
         g_slot_sockets[slot][count] = fd;
         g_slot_socket_counts[slot] = count + 1;
@@ -118,6 +122,26 @@ void decade_proxy_untrack_socket(int slot, int fd) {
         }
     }
     pthread_mutex_unlock(&g_sock_lock);
+}
+
+void decade_proxy_refresh_all_sockets(void) {
+    int fds[256];
+    int total = 0;
+    pthread_mutex_lock(&g_sock_lock);
+    for (int s = 0; s < JVM_BRIDGE_MAX_SLOTS && total < 256; s++) {
+        int count = g_slot_socket_counts[s];
+        for (int i = 0; i < count && total < 256; i++) {
+            int fd = g_slot_sockets[s][i];
+            if (fd >= 0) {
+                fds[total++] = fd;
+            }
+        }
+    }
+    pthread_mutex_unlock(&g_sock_lock);
+
+    for (int i = 0; i < total; i++) {
+        decade_network_optimize_socket(fds[i]);
+    }
 }
 
 void decade_proxy_disconnect_slot_sockets(int slot) {

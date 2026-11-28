@@ -433,6 +433,10 @@ void jvm_bridge_disconnect_slot_sockets(int slot) {
     decade_proxy_disconnect_slot_sockets(slot);
 }
 
+void jvm_bridge_refresh_all_sockets(void) {
+    decade_proxy_refresh_all_sockets();
+}
+
 // ============================================================
 // Per-Tab Proxy Routing Implementation
 // ============================================================

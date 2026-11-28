@@ -1645,10 +1645,14 @@ class GameViewController: UIViewController, UITextFieldDelegate {
 
     @objc private func handleAppBackgroundChange() {
         isAppInBackground = true
+        if DecadeBackgroundKeeper.shared.isTreoActive {
+            DecadeNetworkKeeper.shared.setBackgroundActive(true)
+        }
     }
 
     @objc private func handleAppForegroundChange() {
         isAppInBackground = false
+        DecadeNetworkKeeper.shared.setBackgroundActive(isOledSleeping)
         if !isOledSleeping {
             j2me_render_set_background(0)
         }
@@ -1665,6 +1669,9 @@ class GameViewController: UIViewController, UITextFieldDelegate {
     }
 
     @objc private func handleNetworkSwitched(_ notif: Notification) {
+        DispatchQueue.global(qos: .utility).async {
+            jvm_bridge_refresh_all_sockets()
+        }
         if let msg = notif.userInfo?["message"] as? String {
             showToast(message: msg)
         }
@@ -1792,6 +1799,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
 
     @objc private func dismissOledBlackOverlay() {
         isOledSleeping = false
+        DecadeNetworkKeeper.shared.setBackgroundActive(isAppInBackground)
         if !isAppInBackground && !DecadePiPManager.shared.isPiPActive {
             j2me_render_set_background(0)
             j2me_input_post_repaint()
@@ -1809,6 +1817,7 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         DecadeBackgroundKeeper.shared.setTreoActive(true)
         DecadeBackgroundKeeper.shared.startKeepalive()
         isOledSleeping = true
+        DecadeNetworkKeeper.shared.setBackgroundActive(true)
         if !DecadePiPManager.shared.isPiPActiveOrStarting {
             j2me_render_set_background(1)
         }

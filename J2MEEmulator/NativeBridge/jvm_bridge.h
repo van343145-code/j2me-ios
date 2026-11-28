@@ -85,6 +85,9 @@ void jvm_bridge_clear_tab_proxies(int slot);
 /// Forcibly disconnect active network sockets for a slot (to reconnect over new proxy).
 void jvm_bridge_disconnect_slot_sockets(int slot);
 
+/// Re-apply keepalive & Voice QoS options across all active game sockets.
+void jvm_bridge_refresh_all_sockets(void);
+
 // ============================================================
 // Server Destination Override ("Thay IP Phiên Bản")
 // ============================================================

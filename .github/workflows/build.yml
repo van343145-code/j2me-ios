@@ -101,16 +101,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.16-jarNO1
-          name: "jarNO1 iOS v1.0.16 (Gộp Setup Bàn Phím + Fix 8 Hướng + Động Cơ x24 512MB)"
+          tag_name: v1.0.17-jarNO1
+          name: "jarNO1 iOS v1.0.17 (Fix Mất Mạng Khi Tắt Màn + Setup Bàn Phím Gọn + 8 Hướng)"
           body: |
-            ## jarNO1 iOS v1.0.16 — Gộp Setup Bàn Phím, Fix Bàn Phím 8 Hướng & Lõi x24 512MB
-            - **Fix hoàn chỉnh bàn phím 8 hướng (`DecadeKeypadView`)**:
-              - Bổ sung đầy đủ 4 phím chéo (`↖`, `↗`, `↙`, `↘`) vào D-Pad 3×3 gửi chuẩn 2 hướng J2ME cùng lúc; thêm công tắc bật/tắt 8 hướng ngay trong `Setup Bàn Phím`.
-              - Vô hiệu hóa `UIPanGestureRecognizer`/`UIPinchGestureRecognizer` ngoài chế độ chỉnh sửa để giữ/lướt phím di chuyển không bao giờ bị iOS ngắt cảm ứng (`touchCancel`).
-              - Độc lập hóa bộ đếm `repeatTimer` theo từng phím để giữ 8 hướng + bấm skill đa chạm không xung đột, và căn giữa cụm 8 hướng khi chọn bố cục `Mũi Tên`.
-            - **Gộp toàn bộ Setup Bàn Phím về 1 màn hình duy nhất**:
-              - Thu gọn menu `[⋮]` về đúng 1 mục `Setup Bàn Phím` (tổng hợp Bật/Tắt · 8 hướng · Kiểu · Cỡ · Độ mờ · Sắp xếp · Ẩn/hiện từng phím · QWERTY).
-            - **Làm sạch codebase & giữ nguyên lõi tối ưu đa tab x24 512MB** (`v1.0.14`).
+            ## jarNO1 iOS v1.0.17 — Fix Mất Kết Nối Mạng Khi Treo Tắt Màn + Setup Bàn Phím + 8 Hướng
+            - **Fix mất kết nối mạng khi treo tắt màn hình**:
+              - **Chống iOS tắt/ngủ Audio & Tiến trình khi khóa màn (`DecadeBackgroundKeeper`)**: Đặt gain siêu âm `0.002` (~`-80 dBFS`, vẫn hoàn toàn im lặng với tai người) thay cho `0.0` để `mediaserverd` iOS 16–26 không đình chỉ tiến trình khi khóa màn; tăng handoff nền 20s + watchdog tự hồi phục mỗi 2s.
+              - **Chống ngủ Wi-Fi & đứt NAT 4G/5G khi tắt màn (`DecadeNetworkKeeper` + `Info.plist`)**: Bật `UIRequiresPersistentWiFi` + `UIBackgroundModes: [audio, fetch]`; phát xung HTTP 204 0-byte nhẹ mỗi 18s chỉ khi chạy nền/ngủ màn OLED + làm mới socket tức thì khi chuyển Wi-Fi ↔ 5G.
+              - **Giữ kết nối TCP tầng kernel (`decade_proxy_tunnel.c`, `net_sockets.c`, `jni_io.c`)**: Khôi phục QoS ưu tiên thoại thời gian thực (`NET_SERVICE_TYPE_VO` / `SO_TC_VO`), siết chu kỳ keepalive 10s/5s×24, và tự thử lại khi gặp `ENOBUFS` tạm thời lúc Wi-Fi/4G chuyển trạng thái.
+            - **Gộp Setup Bàn Phím 1 màn hình & Fix bàn phím 8 hướng** (từ `v1.0.16`).
+            - **Lõi x24 tab 512MB Heap & làm sạch thương hiệu jarNO1**.
           files: |
             jarNO1.ipa

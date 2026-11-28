@@ -372,10 +372,11 @@ class AppsListViewController: UIViewController,
             audioState = keeper.audioStatus
         }
 
+        let netKeep = DecadeNetworkKeeper.shared.isRunning ? "BẬT ✓" : "TẮT"
         let waitDiagLine = keeper.lastWaitDiag.isEmpty ? "" : "\n• Chẩn đoán wait: \(keeper.lastWaitDiag)"
         let alert = UIAlertController(
             title: "Treo Game 24/24 (Lõi Nền jarNO1)",
-            message: "• Tự nhớ chạy ẩn & tắt màn: \(isTreo ? "ĐANG BẬT ✓" : "ĐANG TẮT")\n• Chế độ Audio: \(keeper.audioModeDescription)\n• Lõi giữ nền: \(audioState)\n• Lần tắt màn gần nhất: \(keeper.lastBgReport)\(waitDiagLine)\n• Mạng: \(netDesc) • RAM: \(Int(ramMB)) MB",
+            message: "• Tự nhớ chạy ẩn & tắt màn: \(isTreo ? "ĐANG BẬT ✓" : "ĐANG TẮT")\n• Chế độ Audio: \(keeper.audioModeDescription)\n• Lõi giữ nền: \(audioState)\n• Giữ mạng tắt màn (Wi-Fi/4G): \(netKeep)\n• Lần tắt màn gần nhất: \(keeper.lastBgReport)\(waitDiagLine)\n• Mạng: \(netDesc) • RAM: \(Int(ramMB)) MB",
             preferredStyle: .actionSheet
         )
         alert.addAction(UIAlertAction(title: isTreo ? "Tắt chế độ Treo 24/24" : "Bật chế độ Treo 24/24 (Tự nhớ vĩnh viễn)", style: .default) { _ in

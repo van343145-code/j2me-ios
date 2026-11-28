@@ -4,22 +4,23 @@
 //
 //  Background audio keepalive manager (App + Scene lifecycle):
 //  - Pure AVAudioPlayer playing `background-loop.wav` with
-//    `numberOfLoops = -1`, `volume = 0.0`, `prepareToPlay()`, `play()`.
+//    `numberOfLoops = -1`, non-zero inaudible gain `volume = 0.002` (~-80 dBFS),
+//    `prepareToPlay()`, `play()`.
 //  - ZERO AVAudioEngine / AVAudioSourceNode (avoids lock-screen AVAudioEngineConfigurationChange
 //    teardown & background AVAudioSession reactivation failures on iOS 18/26).
 //  - ZERO eager AVPictureInPictureController / AVSampleBufferDisplayLayer at startup.
-//  - Uses `AVAudioSession.setCategory(.playback, options: [.mixWithOthers])` +
-//    `setActive(true)` by default (plus optional 1-tap Exclusive `.playback` mode).
-//  - Includes 5.0-second repeating RunLoop monitor + 4.0-second `beginBackgroundTask` handoff
-//    on `DidEnterBackground`.
+//  - Uses `AVAudioSession.setCategory(.playback, mode: .default, options: ...)` + `setActive(true)`.
+//  - Includes 2.0-second repeating RunLoop monitor + 20.0-second `beginBackgroundTask` handoff
+//    plus background anti-Wi-Fi-sleep keepalive probes via `DecadeNetworkKeeper`.
 //  - Permanently remembers `isTreoActive` (default TRUE) after enabling / tapping "Ẩn Ứng Dụng"
 //    once, so every future multitasking swipe or screen lock automatically stays running 24/24.
-//  - Includes passive 1-second background execution proof telemetry for on-device verification.
+//  - Includes passive background execution proof telemetry for on-device verification.
 //
 
 import UIKit
 import AVFoundation
 import UserNotifications
+import Network
 
 // ============================================================
 // MARK: - Decade Location Keeper (Disabled)
@@ -44,19 +45,142 @@ final class DecadeLocationKeeper: NSObject {
 }
 
 // ============================================================
-// MARK: - Decade Network Keeper (Passive Stub — Zero Radio Churn)
+// MARK: - Decade Network Keeper (Background Anti-Wi-Fi-Sleep & CGNAT Keepalive)
 // ============================================================
 
 final class DecadeNetworkKeeper {
     static let shared = DecadeNetworkKeeper()
 
+    private let monitorQueue = DispatchQueue(label: "jarno1.network.keeper", qos: .utility)
+    private var pathMonitor: NWPathMonitor?
+    private var heartbeatTimer: DispatchSourceTimer?
+    private let probeSession: URLSession
+
     private(set) var isRunning = false
+    private(set) var isInBackground = false
     private(set) var isNetworkConnected = true
+    private(set) var lastProbeDate: Date?
+    private var lastPathKey: String = ""
+    private var endpointIndex = 0
 
-    private init() { }
+    // Ultra-lightweight 0-byte HTTP 204/captive endpoints: keep Wi-Fi/Cellular radios awake off-screen
+    // with virtually zero data & battery impact.
+    private let probeEndpoints = [
+        "http://connectivitycheck.gstatic.com/generate_204",
+        "http://captive.apple.com/hotspot-detect.html",
+        "http://cp.cloudflare.com/generate_204"
+    ]
 
-    func start() { isRunning = true }
-    func stop() { isRunning = false }
+    private init() {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.timeoutIntervalForRequest = 4.0
+        cfg.timeoutIntervalForResource = 6.0
+        cfg.waitsForConnectivity = false
+        cfg.allowsCellularAccess = true
+        cfg.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        cfg.urlCache = nil
+        probeSession = URLSession(configuration: cfg)
+    }
+
+    func start() {
+        isRunning = true
+        startPathMonitor()
+        updateHeartbeatSchedule(sendImmediately: isInBackground)
+    }
+
+    func stop() {
+        isRunning = false
+        isInBackground = false
+        stopHeartbeat()
+        pathMonitor?.cancel()
+        pathMonitor = nil
+    }
+
+    func setBackgroundActive(_ active: Bool) {
+        let transitionedToBg = active && !isInBackground
+        isInBackground = active
+        if active {
+            DispatchQueue.global(qos: .utility).async {
+                jvm_bridge_refresh_all_sockets()
+            }
+        }
+        updateHeartbeatSchedule(sendImmediately: transitionedToBg)
+    }
+
+    private func startPathMonitor() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] path in
+            let connected = (path.status == .satisfied)
+            let ifKey = "\(connected)-\(path.usesInterfaceType(.wifi))-\(path.usesInterfaceType(.cellular))"
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                let changed = (ifKey != self.lastPathKey)
+                self.lastPathKey = ifKey
+                self.isNetworkConnected = connected
+                if changed && connected {
+                    DispatchQueue.global(qos: .utility).async {
+                        jvm_bridge_refresh_all_sockets()
+                    }
+                    if self.isRunning && self.isInBackground {
+                        self.sendWakeProbe()
+                    }
+                }
+            }
+        }
+        monitor.start(queue: monitorQueue)
+        pathMonitor = monitor
+    }
+
+    private func updateHeartbeatSchedule(sendImmediately: Bool) {
+        guard isRunning && isInBackground else {
+            stopHeartbeat()
+            return
+        }
+        if sendImmediately {
+            sendWakeProbe()
+        }
+        guard heartbeatTimer == nil else { return }
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
+        timer.schedule(deadline: .now() + 18.0, repeating: 18.0)
+        timer.setEventHandler { [weak self] in
+            DispatchQueue.main.async {
+                guard let self = self, self.isRunning, self.isInBackground else { return }
+                self.sendWakeProbe()
+            }
+        }
+        timer.resume()
+        heartbeatTimer = timer
+    }
+
+    private func stopHeartbeat() {
+        heartbeatTimer?.cancel()
+        heartbeatTimer = nil
+    }
+
+    private func sendWakeProbe() {
+        if let last = lastProbeDate, Date().timeIntervalSince(last) < 5.0 {
+            return
+        }
+        lastProbeDate = Date()
+
+        let urlStr = probeEndpoints[endpointIndex % probeEndpoints.count]
+        endpointIndex += 1
+        guard let url = URL(string: urlStr) else { return }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "HEAD"
+        req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        req.timeoutInterval = 4.0
+
+        probeSession.dataTask(with: req) { _, response, _ in
+            if let http = response as? HTTPURLResponse, (200...204).contains(http.statusCode) {
+                DispatchQueue.main.async { [weak self] in
+                    self?.isNetworkConnected = true
+                }
+            }
+        }.resume()
+    }
 }
 
 // ============================================================
@@ -373,14 +497,14 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    /// 5.0-second repeating monitor timer + Flight Recorder heartbeat
+    /// 2.0-second repeating monitor timer + Flight Recorder heartbeat
     private func startMonitorIfNeeded() {
         guard monitorTimer == nil else { return }
-        let timer = Timer(timeInterval: 5.0, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 2.0, repeats: true) { [weak self] _ in
             guard let self = self, self.wanted else { return }
             if self.interrupted {
                 // Self-heal if iOS drops `.ended` after a transient notification/lock transition
-                if let at = self.interruptedAt, Date().timeIntervalSince(at) >= 4.0 {
+                if let at = self.interruptedAt, Date().timeIntervalSince(at) >= 2.0 {
                     self.interrupted = false
                     self.interruptedAt = nil
                     self.ensurePlaying()
@@ -399,11 +523,11 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         monitorTimer = timer
     }
 
-    /// Ensure background silent audio loop keeps running cleanly:
+    /// Ensure background audio keepalive loop keeps running cleanly:
     /// 1. If `audioPlayer.isPlaying` is already true -> immediately return WITHOUT touching AVAudioSession!
-    /// 2. `AVAudioSession.setCategory(.playback, options: [.mixWithOthers])` + `setActive(true)`
+    /// 2. `AVAudioSession.setCategory(.playback, mode: .default, options: ...)` + `setActive(true)`
     /// 3. Load `background-loop.wav`
-    /// 4. `numberOfLoops = -1`, `volume = 0.0`, `prepareToPlay()`, `play()`.
+    /// 4. `numberOfLoops = -1`, non-zero inaudible `volume = 0.002` (~-80 dBFS), `prepareToPlay()`, `play()`.
     private func ensurePlaying() {
         guard wanted, !interrupted else { return }
 
@@ -415,7 +539,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         let session = AVAudioSession.sharedInstance()
         let options: AVAudioSession.CategoryOptions = isExclusiveAudioMode ? [] : [.mixWithOthers]
         do {
-            try session.setCategory(.playback, options: options)
+            try session.setCategory(.playback, mode: .default, options: options)
             try session.setActive(true)
         } catch {
             let nsErr = error as NSError
@@ -448,7 +572,9 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
 
         guard let p = audioPlayer else { return }
-        p.volume = 0.0
+        // Non-zero sub-audible gain (-80 dBFS total with 16Hz WAV) prevents iOS 16-26 mediaserverd
+        // from treating the player as muted (0.0) and suspending the app on screen lock.
+        p.volume = 0.002
         guard p.prepareToPlay(), p.play() else {
             lastAudioError = "Play() trả false"
             audioStatus = "play-false"
@@ -540,7 +666,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
     }
 
-    // MARK: - Background Transition 4.0s Handoff
+    // MARK: - Background Transition 20.0s Handoff
 
     private func beginBackgroundHandoffTask() {
         let now = CACurrentMediaTime()
@@ -551,9 +677,15 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
 
         endAppBackgroundTask()
         bgTaskID = UIApplication.shared.beginBackgroundTask(withName: "jarNO1-BgHandoff") { [weak self] in
-            self?.endAppBackgroundTask()
+            guard let self = self else { return }
+            self.endAppBackgroundTask()
+            if self.wanted && self.isInBackground && !self.isAudioPlaying {
+                self.interrupted = false
+                self.interruptedAt = nil
+                self.ensurePlaying()
+            }
         }
-        let timer = Timer(timeInterval: 4.0, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: 20.0, repeats: false) { [weak self] _ in
             self?.endAppBackgroundTask()
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -619,6 +751,12 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                 }
             }
 
+            // Activate background anti-Wi-Fi-sleep probes & refresh kernel TCP keepalive/QoS on screen off
+            if self.isTreoActive && self.hasActiveGame {
+                DecadeNetworkKeeper.shared.start()
+                DecadeNetworkKeeper.shared.setBackgroundActive(true)
+            }
+
             self.startBackgroundRecordingIfNeeded()
         }
     }
@@ -627,6 +765,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         runOnMain { [weak self] in
             guard let self = self else { return }
             self.isInBackground = false
+            DecadeNetworkKeeper.shared.setBackgroundActive(GameViewController.isOledSleepingActive)
             if !GameViewController.isOledSleepingActive {
                 j2me_render_set_background(0)
             }
@@ -649,6 +788,7 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         runOnMain { [weak self] in
             guard let self = self else { return }
             self.isInBackground = false
+            DecadeNetworkKeeper.shared.setBackgroundActive(GameViewController.isOledSleepingActive)
             if !GameViewController.isOledSleepingActive {
                 j2me_render_set_background(0)
             }
@@ -678,6 +818,11 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
                 self.interrupted = false
                 self.interruptedAt = nil
                 self.ensurePlaying()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                    guard let self = self, self.wanted, !self.isAudioPlaying else { return }
+                    self.interrupted = false
+                    self.ensurePlaying()
+                }
             @unknown default:
                 break
             }

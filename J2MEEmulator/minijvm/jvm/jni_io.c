@@ -144,6 +144,9 @@ s32 sock_option(VmSock *vmsock, s32 opType, s32 opValue, s32 opValue2) {
         case SOCK_OP_TYPE_KEEPALIVE: {
             s32 val = opValue;
             ret = setsockopt(vmsock->contex.fd, SOL_SOCKET, SO_KEEPALIVE, (const c8 *) &val, sizeof(val));
+            if (val && ret == 0 && vmsock->contex.fd >= 0) {
+                decade_network_optimize_socket(vmsock->contex.fd);
+            }
             break;
         }
     }

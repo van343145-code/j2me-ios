@@ -25,8 +25,12 @@ void decade_proxy_untrack_socket(int slot, int fd);
 void decade_proxy_disconnect_slot_sockets(int slot);
 
 /// Optimize a socket descriptor with low-latency TCP_NODELAY, keep-alive probes,
-/// SO_NOSIGPIPE, fallback interface and high-throughput buffer sizes.
+/// SO_NOSIGPIPE, Voice QoS traffic class and high-throughput buffer sizes.
 void decade_network_optimize_socket(int fd);
+
+/// Re-apply keepalive & Voice QoS options across all currently tracked live sockets
+/// (e.g. on screen lock or Wi-Fi/5G handover).
+void decade_proxy_refresh_all_sockets(void);
 
 #ifdef __cplusplus
 }

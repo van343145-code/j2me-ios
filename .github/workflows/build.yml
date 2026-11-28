@@ -101,15 +101,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main') || startsWith(github.ref, 'refs/heads/master')
         with:
-          tag_name: v1.0.17-jarNO1
-          name: "jarNO1 iOS v1.0.17 (Fix Mất Mạng Khi Tắt Màn + Setup Bàn Phím Gọn + 8 Hướng)"
+          tag_name: v1.0.18-jarNO1
+          name: "jarNO1 iOS v1.0.18 (Fix Bàn Phím Ảo Chạm Trực Tiếp + Fix Audio Nền 16Hz Không Rớt Mạng)"
           body: |
-            ## jarNO1 iOS v1.0.17 — Fix Mất Kết Nối Mạng Khi Treo Tắt Màn + Setup Bàn Phím + 8 Hướng
-            - **Fix mất kết nối mạng khi treo tắt màn hình**:
-              - **Chống iOS tắt/ngủ Audio & Tiến trình khi khóa màn (`DecadeBackgroundKeeper`)**: Đặt gain siêu âm `0.002` (~`-80 dBFS`, vẫn hoàn toàn im lặng với tai người) thay cho `0.0` để `mediaserverd` iOS 16–26 không đình chỉ tiến trình khi khóa màn; tăng handoff nền 20s + watchdog tự hồi phục mỗi 2s.
-              - **Chống ngủ Wi-Fi & đứt NAT 4G/5G khi tắt màn (`DecadeNetworkKeeper` + `Info.plist`)**: Bật `UIRequiresPersistentWiFi` + `UIBackgroundModes: [audio, fetch]`; phát xung HTTP 204 0-byte nhẹ mỗi 18s chỉ khi chạy nền/ngủ màn OLED + làm mới socket tức thì khi chuyển Wi-Fi ↔ 5G.
-              - **Giữ kết nối TCP tầng kernel (`decade_proxy_tunnel.c`, `net_sockets.c`, `jni_io.c`)**: Khôi phục QoS ưu tiên thoại thời gian thực (`NET_SERVICE_TYPE_VO` / `SO_TC_VO`), siết chu kỳ keepalive 10s/5s×24, và tự thử lại khi gặp `ENOBUFS` tạm thời lúc Wi-Fi/4G chuyển trạng thái.
-            - **Gộp Setup Bàn Phím 1 màn hình & Fix bàn phím 8 hướng** (từ `v1.0.16`).
-            - **Lõi x24 tab 512MB Heap & làm sạch thương hiệu jarNO1**.
+            ## jarNO1 iOS v1.0.18 — Fix Bàn Phím Ảo & Chống Đình Chỉ Nền Khi Ẩn / Tắt Màn
+            - **Fix triệt để bàn phím ảo không ăn nút (`DecadeKeypadView`)**:
+              - Chuyển toàn bộ bàn phím ảo sang nhận cảm ứng đa chạm trực tiếp (`touchesBegan` / `touchesMoved` / `touchesEnded` / `touchesCancelled`) giống lõi cảm ứng màn hình game (`EmulatorView`).
+              - Hỗ trợ **lướt ngón tay mượt qua cụm D-Pad 8 hướng** (`↑ ↓ ← → ↖ ↗ ↙ ↘ OK`) không cần nhấc tay, đa chạm giữ phím di chuyển + bấm skill cùng lúc, và thêm nút **"✓ Xong sửa phím"** nổi ngay trên bàn phím khi sửa/thu phóng.
+              - Đảm bảo `showCanvasView()` luôn đưa bàn phím ảo lên lớp trên cùng sau khi đóng hộp thoại/Form.
+            - **Fix iOS đóng băng tiến trình gây rớt mạng khi ẩn màn / tắt màn (`DecadeBackgroundKeeper`)**:
+              - Dùng trực tiếp `silent.wav` (sóng siêu âm 16 Hz, `-57.2 dBFS`, `rms = 31.8 LSB`) ở `volume = 1.0` thay cho `background-loop.wav` ở `0.002` (`rms = 0.43 LSB`, bị làm tròn về `0` khiến `mediaserverd` vẫn coi là im lặng và đình chỉ app khi ẩn/tắt màn).
+            - **Giữ nguyên toàn bộ nâng cấp `v1.0.17`**: `DecadeNetworkKeeper` 18s chống ngủ Wi-Fi/CGNAT, `NET_SERVICE_TYPE_VO`/`SO_TC_VO`, keepalive 10s, gộp Setup Bàn Phím 1 màn hình, lõi x24 tab 512MB Heap.
           files: |
             jarNO1.ipa

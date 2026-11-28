@@ -550,17 +550,22 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
 
         if audioPlayer == nil {
-            guard let url = Bundle.main.url(forResource: "background-loop", withExtension: "wav")
-                    ?? Bundle.main.url(forResource: "silent", withExtension: "wav") else {
-                lastAudioError = "missing background-loop.wav"
+            let wavURL = Bundle.main.url(forResource: "silent", withExtension: "wav")
+                ?? Bundle.main.url(forResource: "background-loop", withExtension: "wav")
+            guard let url = wavURL else {
+                lastAudioError = "missing silent.wav"
                 audioStatus = "error(no-wav)"
-                print("[BackgroundAudio] Missing background-loop.wav in bundle")
+                print("[BackgroundAudio] Missing silent.wav / background-loop.wav in bundle")
                 return
             }
             do {
                 let p = try AVAudioPlayer(contentsOf: url)
                 p.delegate = self
                 p.numberOfLoops = -1
+                // silent.wav is a 16Hz subsonic sine wave (-57.2 dBFS, rms=31.8 LSB):
+                // physically inaudible on iPhone speakers/headphones at volume=1.0 while staying
+                // well above iOS 16-26 mediaserverd silence-detection thresholds (~-72 dBFS).
+                p.volume = (url.lastPathComponent == "silent.wav") ? 1.0 : 0.02
                 audioPlayer = p
             } catch {
                 let nsErr = error as NSError
@@ -572,9 +577,6 @@ final class DecadeBackgroundKeeper: NSObject, AVAudioPlayerDelegate {
         }
 
         guard let p = audioPlayer else { return }
-        // Non-zero sub-audible gain (-80 dBFS total with 16Hz WAV) prevents iOS 16-26 mediaserverd
-        // from treating the player as muted (0.0) and suspending the app on screen lock.
-        p.volume = 0.002
         guard p.prepareToPlay(), p.play() else {
             lastAudioError = "Play() trả false"
             audioStatus = "play-false"

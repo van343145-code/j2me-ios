@@ -32,8 +32,10 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
 
     private let haptic = UIImpactFeedbackGenerator(style: .light)
     private var buttonRepeatTimers: [ObjectIdentifier: Timer] = [:]
+    private var activeTouches: [UITouch: DecadeKeyButton] = [:]
     private var editPanGestures: [UIPanGestureRecognizer] = []
     private var editPinchGestures: [UIPinchGestureRecognizer] = []
+    private let finishEditBannerBtn = UIButton(type: .system)
 
     var onTextInputTapped: (() -> Void)?
     var onMenuTapped: (() -> Void)?
@@ -131,23 +133,45 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
         layer.cornerRadius = 16
         layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
         clipsToBounds = true
+        isUserInteractionEnabled = true
         isMultipleTouchEnabled = true
 
         containerView.backgroundColor = .clear
+        containerView.isUserInteractionEnabled = false
         containerView.isMultipleTouchEnabled = true
         containerView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(containerView)
+
+        finishEditBannerBtn.setTitle("✓ Xong sửa phím", for: .normal)
+        finishEditBannerBtn.titleLabel?.font = .systemFont(ofSize: 13, weight: .bold)
+        finishEditBannerBtn.setTitleColor(.white, for: .normal)
+        finishEditBannerBtn.backgroundColor = UIColor(red: 0.14, green: 0.62, blue: 0.30, alpha: 0.96)
+        finishEditBannerBtn.layer.cornerRadius = 14
+        finishEditBannerBtn.contentEdgeInsets = UIEdgeInsets(top: 5, left: 14, bottom: 5, right: 14)
+        finishEditBannerBtn.addTarget(self, action: #selector(finishEditBannerTapped), for: .touchUpInside)
+        finishEditBannerBtn.translatesAutoresizingMaskIntoConstraints = false
+        finishEditBannerBtn.isHidden = true
+        addSubview(finishEditBannerBtn)
 
         NSLayoutConstraint.activate([
             containerView.topAnchor.constraint(equalTo: topAnchor, constant: 4),
             containerView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
             containerView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -6),
             containerView.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor, constant: -4),
+
+            finishEditBannerBtn.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            finishEditBannerBtn.centerXAnchor.constraint(equalTo: centerXAnchor),
+            finishEditBannerBtn.heightAnchor.constraint(equalToConstant: 30)
         ])
 
+        haptic.prepare()
         loadSavedCustomLayout()
         loadDiagonalPreference()
         rebuildKeypad()
+    }
+
+    @objc private func finishEditBannerTapped() {
+        finishEditingLayout()
     }
 
     deinit {
@@ -170,6 +194,15 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
         buttonRepeatTimers.removeAll()
     }
 
+    private func releaseAllActiveTouches() {
+        let held = Set(activeTouches.values.map { ObjectIdentifier($0) })
+        for btn in buttons where held.contains(ObjectIdentifier(btn)) {
+            releaseButton(btn)
+        }
+        activeTouches.removeAll()
+        stopAllRepeatTimers()
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         applyButtonPositions()
@@ -180,7 +213,7 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
     // ============================================================
 
     func rebuildKeypad() {
-        stopAllRepeatTimers()
+        releaseAllActiveTouches()
         editPanGestures.removeAll()
         editPinchGestures.removeAll()
         buttons.forEach { $0.removeFromSuperview() }
@@ -289,11 +322,10 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
                 style: item.style
             )
 
-            // Touch events
-            btn.addTarget(self, action: #selector(buttonDown(_:)), for: .touchDown)
-            btn.addTarget(self, action: #selector(buttonUp(_:)), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+            let isEditing = isEditLayoutMode || isResizeLayoutMode
+            btn.isUserInteractionEnabled = isEditing
 
-            // Edit gestures — disabled during normal gameplay so holding 8-way keys never cancels touches!
+            // Edit gestures — only active while editing/resizing; normal gameplay uses direct touchesBegan/Moved/Ended!
             let pan = UIPanGestureRecognizer(target: self, action: #selector(handlePan(_:)))
             pan.delegate = self
             pan.isEnabled = isEditLayoutMode
@@ -311,7 +343,13 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
             buttons.append(btn)
         }
 
+        containerView.isUserInteractionEnabled = isEditLayoutMode || isResizeLayoutMode
+        finishEditBannerBtn.isHidden = !(isEditLayoutMode || isResizeLayoutMode)
+        bringSubviewToFront(finishEditBannerBtn)
         updateKeysVisibility()
+        if containerView.bounds.width > 0 && containerView.bounds.height > 0 {
+            applyButtonPositions()
+        }
         setNeedsLayout()
     }
 
@@ -405,16 +443,123 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
     }
 
     // ============================================================
-    // MARK: - Key Press Handling (Standard J2ME MIDP 2.0 Spec)
+    // MARK: - Direct Multi-Touch Key Handling (Standard J2ME MIDP 2.0 Spec)
     // ============================================================
 
-    @objc private func buttonDown(_ sender: DecadeKeyButton) {
-        guard !isEditLayoutMode && !isResizeLayoutMode else { return }
+    private func hitButton(at pointInSelf: CGPoint, tolerance: CGFloat = 3.0) -> DecadeKeyButton? {
+        let pt = convert(pointInSelf, to: containerView)
+        // Exact hit first
+        for btn in buttons.reversed() {
+            guard !btn.isHidden, btn.alpha >= 0.05 else { continue }
+            if btn.frame.contains(pt) {
+                return btn
+            }
+        }
+        // Small gap tolerance so edge taps between keys still register cleanly
+        if tolerance > 0 {
+            for btn in buttons.reversed() {
+                guard !btn.isHidden, btn.alpha >= 0.05 else { continue }
+                if btn.frame.insetBy(dx: -tolerance, dy: -tolerance).contains(pt) {
+                    return btn
+                }
+            }
+        }
+        return nil
+    }
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isEditLayoutMode && !isResizeLayoutMode else {
+            super.touchesBegan(touches, with: event)
+            return
+        }
+        for touch in touches {
+            guard let btn = hitButton(at: touch.location(in: self)) else { continue }
+            let alreadyHeld = activeTouches.values.contains { $0 === btn }
+            activeTouches[touch] = btn
+            if !alreadyHeld {
+                pressButton(btn)
+            }
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isEditLayoutMode && !isResizeLayoutMode else {
+            super.touchesMoved(touches, with: event)
+            return
+        }
+        for touch in touches {
+            let loc = touch.location(in: self)
+            let oldBtn = activeTouches[touch]
+            let newBtn = hitButton(at: loc, tolerance: 2.0)
+
+            if oldBtn === newBtn { continue }
+
+            // Smooth 8-way D-Pad thumb sliding across pane 2 keys (↑ ↓ ← → ↖ ↗ ↙ ↘ OK)
+            if let old = oldBtn, let next = newBtn, old.pane == 2 && next.pane == 2 {
+                activeTouches[touch] = next
+                let oldStillHeld = activeTouches.values.contains { $0 === old }
+                if !oldStillHeld {
+                    releaseButton(old)
+                }
+                let nextAlreadyHeld = activeTouches.contains { $0.key !== touch && $0.value === next }
+                if !nextAlreadyHeld {
+                    pressButton(next)
+                }
+                continue
+            }
+
+            // If finger slid far outside the button (> 18pt), release it cleanly
+            if let old = oldBtn {
+                let pt = convert(loc, to: containerView)
+                if !old.frame.insetBy(dx: -18, dy: -18).contains(pt) {
+                    activeTouches.removeValue(forKey: touch)
+                    let oldStillHeld = activeTouches.values.contains { $0 === old }
+                    if !oldStillHeld {
+                        releaseButton(old)
+                    }
+                    if let next = newBtn {
+                        let nextAlreadyHeld = activeTouches.values.contains { $0 === next }
+                        activeTouches[touch] = next
+                        if !nextAlreadyHeld {
+                            pressButton(next)
+                        }
+                    }
+                }
+            } else if let next = newBtn {
+                let nextAlreadyHeld = activeTouches.values.contains { $0 === next }
+                activeTouches[touch] = next
+                if !nextAlreadyHeld {
+                    pressButton(next)
+                }
+            }
+        }
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard !isEditLayoutMode && !isResizeLayoutMode else {
+            super.touchesEnded(touches, with: event)
+            return
+        }
+        for touch in touches {
+            if let btn = activeTouches.removeValue(forKey: touch) {
+                let stillHeld = activeTouches.values.contains { $0 === btn }
+                if !stillHeld {
+                    releaseButton(btn)
+                }
+            }
+        }
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        touchesEnded(touches, with: event)
+    }
+
+    private func pressButton(_ sender: DecadeKeyButton) {
         haptic.impactOccurred(intensity: 0.6)
 
-        UIView.animate(withDuration: 0.08) {
+        UIView.animate(withDuration: 0.06, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
             sender.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
-            sender.alpha = 0.82
+            sender.alpha = max(0.45, self.keypadAlphaValue * 0.78)
         }
 
         // Send KEY_PRESSED ONCE (never duplicate KEY_PRESSED on hold!)
@@ -437,13 +582,12 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
         buttonRepeatTimers[bid] = initialTimer
     }
 
-    @objc private func buttonUp(_ sender: DecadeKeyButton) {
-        guard !isEditLayoutMode && !isResizeLayoutMode else { return }
+    private func releaseButton(_ sender: DecadeKeyButton) {
         let bid = ObjectIdentifier(sender)
         buttonRepeatTimers[bid]?.invalidate()
         buttonRepeatTimers.removeValue(forKey: bid)
 
-        UIView.animate(withDuration: 0.1) {
+        UIView.animate(withDuration: 0.08, delay: 0, options: [.allowUserInteraction, .beginFromCurrentState]) {
             sender.transform = .identity
             sender.alpha = self.keypadAlphaValue
         }
@@ -536,6 +680,15 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
     }
 
     private func updateEditModeAppearance() {
+        let isEditing = isEditLayoutMode || isResizeLayoutMode
+        if isEditing {
+            releaseAllActiveTouches()
+        }
+        containerView.isUserInteractionEnabled = isEditing
+        finishEditBannerBtn.isHidden = !isEditing
+        if isEditing {
+            bringSubviewToFront(finishEditBannerBtn)
+        }
         for pan in editPanGestures {
             pan.isEnabled = isEditLayoutMode
         }
@@ -543,7 +696,8 @@ class DecadeKeypadView: UIView, UIGestureRecognizerDelegate {
             pinch.isEnabled = isResizeLayoutMode
         }
         for btn in buttons {
-            if isEditLayoutMode || isResizeLayoutMode {
+            btn.isUserInteractionEnabled = isEditing
+            if isEditing {
                 btn.layer.borderWidth = 2.0
                 btn.layer.borderColor = UIColor.systemGreen.cgColor
             } else {

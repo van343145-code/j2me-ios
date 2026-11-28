@@ -2359,8 +2359,12 @@ class GameViewController: UIViewController, UITextFieldDelegate {
         let currentTabName = (activeTabIndex < tabSessions.count) ? tabSessions[activeTabIndex].appName : appName
         titleLabel.text = currentTabName
         emulatorView.isHidden = false
-        decadeKeypadView?.isHidden = isKeypadHidden
+        decadeKeypadView?.isHidden = isForceFullscreenEnabled || isKeypadHidden
+        if let kp = decadeKeypadView {
+            view.bringSubviewToFront(kp)
+        }
         floatingShowKeypadBtn.isHidden = isForceFullscreenEnabled || !isKeypadHidden
+        view.bringSubviewToFront(floatingShowKeypadBtn)
         textBoxView.isHidden = true
         formView.isHidden = true
         listView.isHidden = true
